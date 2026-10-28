@@ -10,11 +10,13 @@ const PUBLIC_DIR = path.resolve(__dirname, 'public');
 
 // Clean up any legacy source maps so internal paths are never exposed
 for (const mapFile of ['bundle.js.map', 'bundle.css.map']) {
-  const mapPath = path.join(PUBLIC_DIR, mapFile);
-  if (fs.existsSync(mapPath)) {
-    try {
-      fs.unlinkSync(mapPath);
-    } catch (_) {}
+  for (const dir of [PUBLIC_DIR, __dirname]) {
+    const mapPath = path.join(dir, mapFile);
+    if (fs.existsSync(mapPath)) {
+      try {
+        fs.unlinkSync(mapPath);
+      } catch (_) {}
+    }
   }
 }
 
@@ -37,12 +39,23 @@ async function buildBundle() {
     sourcemap: false,
     logLevel: 'info',
   });
+
+  // Also sync index.html, bundle.js, bundle.css, favicon.ico, and .nojekyll to root
+  // so GitHub Pages (serving from branch root `/`) loads the live app instead of README.md
+  for (const asset of ['index.html', 'bundle.js', 'bundle.css', 'favicon.ico']) {
+    const src = path.join(PUBLIC_DIR, asset);
+    const dest = path.join(__dirname, asset);
+    if (fs.existsSync(src)) {
+      fs.copyFileSync(src, dest);
+    }
+  }
+  fs.writeFileSync(path.join(__dirname, '.nojekyll'), '');
 }
 
 await buildBundle();
 
 if (process.argv.includes('--build')) {
-  console.log('Secure production build complete: public/bundle.js and public/bundle.css');
+  console.log('Secure production build complete (synced to root for GitHub Pages).');
   process.exit(0);
 }
 
@@ -96,7 +109,6 @@ const server = http.createServer((req, res) => {
     const relativeTarget = rawPath === '/' ? 'index.html' : rawPath.replace(/^\/+/, '');
     let resolvedPath = path.resolve(PUBLIC_DIR, relativeTarget);
 
-    // Strictly block any path traversal outside PUBLIC_DIR or access to .map files
     if (!resolvedPath.startsWith(PUBLIC_DIR + path.sep) || resolvedPath.endsWith('.map')) {
       res.writeHead(403, { ...SECURITY_HEADERS, 'Content-Type': 'text/plain' });
       res.end('Forbidden');

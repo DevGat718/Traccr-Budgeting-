@@ -10,11 +10,7 @@ design mock ups /
 *mockup*
 *Showcase*.png
 
-# Build / Bundle & Source Maps
-/build
-/dist
-/public/bundle.js
-/public/bundle.css
+# Source Maps (Never Commit)
 *.map
 
 # Environment & Secrets (Never Commit)
