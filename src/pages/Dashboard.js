@@ -29,8 +29,6 @@ import {
 import {
   exportToCSV,
   processProfileImageFile,
-  getFirebaseConfig,
-  saveFirebaseConfig,
 } from '../utils/dataStorage.js';
 
 /**
@@ -145,10 +143,6 @@ export default function Dashboard({
   const [vehMakeModel, setVehMakeModel] = useState('');
   const [vehType, setVehType] = useState('Executive Sedan');
   const [vehPlate, setVehPlate] = useState('');
-
-  // Optional Firebase cloud config state
-  const [fbConfig, setFbConfig] = useState(() => getFirebaseConfig());
-  const [fbSavedMsg, setFbSavedMsg] = useState('');
 
   const profileFileInputRef = useRef(null);
 
@@ -1614,62 +1608,6 @@ export default function Dashboard({
                       >
                         {settings.darkMode ? 'Dark Canvas Active' : 'Switch to Dark Canvas'}
                       </button>
-                    </div>
-                  </div>
-
-                  {/* CARD 4: FIREBASE BACKEND CONNECTION */}
-                  <div className="dmg-card">
-                    <h3 className="dmg-card-title" style={{ marginBottom: '8px' }}>
-                      Firebase Backend Connection
-                    </h3>
-                    <p style={{ fontSize: '12.5px', color: 'var(--dmg-text-muted)', marginBottom: '14px' }}>
-                      TRACCR includes a built-in local Firebase Auth store out of the box. Paste your Firebase Web API Key &amp; Project ID below to sync accounts with live Firebase Authentication.
-                    </p>
-
-                    <div className="dmg-field">
-                      <label>Firebase Web API Key</label>
-                      <input
-                        type="password"
-                        autoComplete="off"
-                        className="dmg-input-light"
-                        placeholder="AIzaSy..."
-                        value={fbConfig.apiKey || ''}
-                        onChange={(e) =>
-                          setFbConfig({ ...fbConfig, apiKey: e.target.value })
-                        }
-                      />
-                    </div>
-
-                    <div className="dmg-field" style={{ marginTop: '10px' }}>
-                      <label>Firebase Project ID</label>
-                      <input
-                        type="text"
-                        className="dmg-input-light"
-                        placeholder="traccr-dmg-official"
-                        value={fbConfig.projectId || ''}
-                        onChange={(e) =>
-                          setFbConfig({ ...fbConfig, projectId: e.target.value })
-                        }
-                      />
-                    </div>
-
-                    <div style={{ marginTop: '14px', display: 'flex', alignItems: 'center', gap: '12px' }}>
-                      <button
-                        type="button"
-                        className="dmg-btn-primary-dark"
-                        onClick={() => {
-                          saveFirebaseConfig(fbConfig);
-                          setFbSavedMsg('Firebase configuration saved!');
-                          setTimeout(() => setFbSavedMsg(''), 3000);
-                        }}
-                      >
-                        Save Firebase Config
-                      </button>
-                      {fbSavedMsg && (
-                        <span style={{ fontSize: '12.5px', color: '#16a34a', fontWeight: 600 }}>
-                          {fbSavedMsg}
-                        </span>
-                      )}
                     </div>
                   </div>
                 </div>
