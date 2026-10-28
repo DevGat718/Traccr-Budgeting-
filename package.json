@@ -1,0 +1,20 @@
+{
+  "name": "traccr-dmg-expense-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "TRACCR by DMG Official - Expense, Income & Car Mileage Tracker",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "build": "node server.js --build"
+  },
+  "dependencies": {
+    "lucide-react": "0.562.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.2"
+  }
+}
