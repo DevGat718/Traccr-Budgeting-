@@ -34,10 +34,17 @@
 html,
 body {
   height: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background-color: var(--dmg-canvas-bg);
   color: var(--dmg-text-main);
   -webkit-font-smoothing: antialiased;
+}
+
+.dmg-mobile-brand,
+.dmg-tx-date-inline {
+  display: none;
 }
 
 button,
@@ -1985,14 +1992,14 @@ textarea {
 @media (max-width: 1120px) {
   .dmg-kpi-grid,
   .dmg-reports-kpi-row {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .dmg-charts-row,
   .dmg-bottom-row,
   .dmg-split-section,
   .dmg-goals-grid,
   .dmg-settings-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .dmg-iphone-companion {
     display: none;
@@ -2003,34 +2010,520 @@ textarea {
   .dmg-sidebar {
     display: none;
   }
-  .dmg-topbar {
-    padding: 0 16px;
+
+  .dmg-main-area,
+  .dmg-workspace-split,
+  .dmg-content-canvas {
+    max-width: 100vw;
+    min-width: 0;
   }
+
+  /* Responsive 2-row Topbar on Mobile */
+  .dmg-topbar {
+    height: auto;
+    padding: 10px 12px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .dmg-topbar-left {
+    display: contents;
+  }
+
+  .dmg-collapse-btn {
+    display: none;
+  }
+
+  .dmg-mobile-brand {
+    display: flex;
+    align-items: center;
+    background: #0c0e12;
+    padding: 5px 10px;
+    border-radius: 9px;
+    border: 1px solid rgba(34, 197, 94, 0.35);
+    flex-shrink: 0;
+    order: 1;
+  }
+
+  .dmg-mobile-brand .dmg-logo-small .dmg-logo-wordmark {
+    font-size: 16px;
+    letter-spacing: 1px;
+  }
+
+  .dmg-mobile-brand .dmg-logo-small .dmg-crown-svg {
+    width: 16px;
+    height: 10px;
+  }
+
+  .dmg-mobile-brand .dmg-logo-small .dmg-logo-sub {
+    font-size: 5.5px;
+    letter-spacing: 1.4px;
+    margin-top: 2px;
+  }
+
+  .dmg-topbar-right {
+    order: 2;
+    margin-left: auto;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .dmg-search-box {
+    order: 3;
+    flex: 1 1 100%;
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .dmg-search-box input {
+    padding: 8px 30px 8px 34px;
+    font-size: 13px;
+  }
+
   .dmg-preview-toggle-btn {
     display: none;
   }
-  .dmg-content-canvas {
-    padding: 18px 16px 86px;
+
+  .dmg-date-range-pill {
+    padding: 5px 8px;
+    gap: 4px;
+    max-width: 156px;
+    overflow: hidden;
   }
+
+  .dmg-date-range-pill select {
+    font-size: 11.5px;
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .dmg-notif-popover {
+    position: fixed;
+    top: 58px;
+    left: 12px;
+    right: 12px;
+    width: auto;
+    max-width: calc(100vw - 24px);
+  }
+
+  /* Content Canvas & Page Header */
+  .dmg-content-canvas {
+    padding: 14px 12px calc(82px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .dmg-page-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .dmg-page-title {
+    font-size: 21px;
+    line-height: 1.2;
+  }
+
+  .dmg-page-subtitle {
+    font-size: 12.5px;
+    line-height: 1.4;
+  }
+
+  .dmg-header-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+    gap: 8px;
+  }
+
+  .dmg-btn-primary-dark,
+  .dmg-btn-secondary-light {
+    justify-content: center;
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 12.5px;
+    white-space: nowrap;
+  }
+
+  /* Cards & KPI Grid */
+  .dmg-card {
+    padding: 15px 14px;
+    border-radius: 14px;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .dmg-card-header {
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .dmg-card-title {
+    font-size: 15px;
+  }
+
   .dmg-kpi-grid,
   .dmg-reports-kpi-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-bottom: 16px;
   }
+
+  .dmg-kpi-card,
+  .dmg-report-stat-card {
+    padding: 13px 12px;
+    min-width: 0;
+  }
+
+  .dmg-kpi-top {
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+
+  .dmg-kpi-icon-box {
+    width: 36px;
+    height: 36px;
+    border-radius: 9px;
+  }
+
+  .dmg-kpi-label {
+    font-size: 11.5px;
+  }
+
+  .dmg-kpi-value,
+  .dmg-report-stat-val {
+    font-size: 19px;
+    word-break: break-word;
+  }
+
+  .dmg-kpi-trend {
+    font-size: 11px;
+    flex-wrap: wrap;
+    line-height: 1.3;
+  }
+
+  /* Charts */
+  .dmg-bar-legend {
+    justify-content: flex-start;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-size: 11.5px;
+  }
+
+  .dmg-bar-chart-area {
+    height: 175px;
+    gap: 6px;
+  }
+
+  .dmg-y-axis {
+    font-size: 10.5px;
+    min-width: 28px;
+  }
+
+  .dmg-bars-columns {
+    gap: 4px;
+  }
+
+  .dmg-bar {
+    width: 7px;
+  }
+
+  .dmg-x-label {
+    font-size: 10.5px;
+  }
+
   .dmg-donut-layout {
     flex-direction: column;
+    align-items: center;
+    gap: 14px;
   }
+
+  .dmg-donut-legend {
+    width: 100%;
+  }
+
+  /* Transaction Rows: 2-Column Mobile Layout with Inline Date */
+  .dmg-tx-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 10px 2px;
+  }
+
+  .dmg-tx-date {
+    display: none;
+  }
+
+  .dmg-tx-date-inline {
+    display: inline;
+    font-weight: 500;
+    opacity: 0.85;
+  }
+
+  .dmg-tx-left {
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .dmg-tx-avatar {
+    width: 34px;
+    height: 34px;
+    font-size: 12px;
+  }
+
+  .dmg-tx-title {
+    font-size: 13.5px;
+  }
+
+  .dmg-tx-subtitle {
+    font-size: 11.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .dmg-tx-right {
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  .dmg-tx-amount {
+    font-size: 13.5px;
+    white-space: nowrap;
+  }
+
+  /* Mileage Overview Card */
+  .dmg-mileage-hero {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .dmg-mileage-big-num {
+    font-size: 24px;
+  }
+
+  .dmg-mileage-big-sub {
+    font-size: 12.5px;
+  }
+
+  .dmg-mileage-hero-car {
+    width: 130px;
+    max-width: 42%;
+  }
+
+  .dmg-mileage-mini-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    padding: 10px 8px;
+  }
+
+  .dmg-m-stat {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 5px;
+    min-width: 0;
+  }
+
+  .dmg-m-val {
+    font-size: 12px;
+    word-break: break-word;
+  }
+
+  .dmg-m-lbl {
+    font-size: 10.5px;
+  }
+
+  .dmg-rate-footer {
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 11.5px;
+  }
+
+  /* Forms, Filter Bars & Garage Strip */
+  .dmg-field-row {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .dmg-filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .dmg-category-pills {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .dmg-cat-pill {
+    flex-shrink: 0;
+  }
+
+  .dmg-filter-controls {
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
+  .dmg-filter-input {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .dmg-garage-strip {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .dmg-vehicle-chip,
+  .dmg-add-vehicle-chip {
+    flex-shrink: 0;
+  }
+
+  /* Reports & Analytics */
+  .dmg-reports-subbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .dmg-reports-tabs {
+    width: 100%;
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .dmg-rtab {
+    flex: 1;
+    text-align: center;
+    white-space: nowrap;
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+
+  .dmg-horiz-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px 10px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--dmg-border);
+  }
+
+  .dmg-horiz-row:last-child {
+    border-bottom: none;
+  }
+
+  .dmg-horiz-cat {
+    flex: 1 1 auto;
+    font-size: 13px;
+  }
+
+  .dmg-horiz-amt {
+    text-align: right;
+    font-size: 13px;
+  }
+
+  .dmg-horiz-pct {
+    text-align: right;
+    font-size: 12px;
+    min-width: 36px;
+  }
+
+  .dmg-horiz-track {
+    order: 4;
+    flex: 1 1 100%;
+    width: 100%;
+    height: 8px;
+  }
+
+  .dmg-tax-calc-row {
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 13px;
+  }
+
+  .dmg-tax-calc-row.highlight {
+    font-size: 14px;
+  }
+
+  /* Goals & Settings */
+  .dmg-goal-top {
+    gap: 10px;
+  }
+
+  .dmg-goal-amounts {
+    flex-wrap: wrap;
+    gap: 4px;
+    font-size: 12.5px;
+  }
+
+  .dmg-goal-actions {
+    flex-wrap: wrap;
+  }
+
+  .dmg-goal-step-btn {
+    flex: 1 1 calc(33.33% - 6px);
+    text-align: center;
+  }
+
+  .dmg-profile-hero {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .dmg-photo-btn-group {
+    flex-wrap: wrap;
+  }
+
+  .dmg-setting-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .dmg-setting-row > button,
+  .dmg-setting-row > select,
+  .dmg-setting-row > .dmg-rate-input-wrap {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .dmg-vehicle-row-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .dmg-veh-row-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  /* 7-Tab Mobile Bottom Navigation */
   .dmg-mobile-bottom-nav {
     position: fixed;
     bottom: 0;
     left: 0;
     right: 0;
-    height: 64px;
+    height: calc(60px + env(safe-area-inset-bottom, 0px));
+    padding: 0 4px env(safe-area-inset-bottom, 0px);
     background: #0c0e12;
     border-top: 1px solid #1f2430;
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(7, minmax(0, 1fr));
     z-index: 40;
   }
+
   .dmg-mnav-btn {
     border: none;
     background: transparent;
@@ -2039,13 +2532,30 @@ textarea {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 4px;
-    font-size: 10px;
+    gap: 3px;
+    font-size: 9.5px;
     font-weight: 600;
     cursor: pointer;
+    padding: 4px 1px;
+    min-width: 0;
   }
+
+  .dmg-mnav-btn span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+
   .dmg-mnav-btn.active {
     color: var(--dmg-green);
+  }
+}
+
+@media (max-width: 400px) {
+  .dmg-kpi-grid,
+  .dmg-reports-kpi-row {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -2516,10 +3026,57 @@ textarea {
 @media (max-width: 960px) {
   .dmg-auth-page {
     grid-template-columns: 1fr;
-    padding: 28px 20px;
+    padding: 24px 16px 36px;
+    gap: 22px;
   }
   .dmg-auth-showcase-col {
+    display: contents;
+  }
+  .dmg-auth-brand-block {
+    order: 1;
+    align-items: center;
+    text-align: center;
+  }
+  .dmg-auth-pillars {
+    line-height: 1.5;
+  }
+  .dmg-auth-form-col {
+    order: 2;
+  }
+  .dmg-auth-car-showcase {
+    order: 3;
+  }
+  .dmg-auth-feature-list {
+    order: 4;
+  }
+  .dmg-auth-card {
     max-width: 100%;
+    padding: 22px 18px;
+    border-radius: 18px;
+  }
+  .dmg-auth-wordmark {
+    font-size: 38px;
+  }
+}
+
+@media (max-width: 560px) {
+  .dmg-auth-car-showcase {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 16px;
+  }
+  .dmg-auth-sedan-svg {
+    width: 185px;
+    max-width: 100%;
+  }
+  .dmg-auth-slogan {
+    font-size: 16px;
+    align-items: center;
+  }
+  .dmg-auth-tab {
+    font-size: 12px;
+    padding: 8px 6px;
   }
 }
 

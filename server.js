@@ -40,16 +40,22 @@ async function buildBundle() {
     logLevel: 'info',
   });
 
-  // Also sync index.html, bundle.js, bundle.css, favicon.ico, and .nojekyll to root
-  // so GitHub Pages (serving from branch root `/`) loads the live app instead of README.md
-  for (const asset of ['index.html', 'bundle.js', 'bundle.css', 'favicon.ico']) {
-    const src = path.join(PUBLIC_DIR, asset);
-    const dest = path.join(__dirname, asset);
-    if (fs.existsSync(src)) {
-      fs.copyFileSync(src, dest);
-    }
+  // Sync index.html, bundle.js, bundle.css, favicon.ico, and .nojekyll to root (/) and docs/
+  // so GitHub Pages (whether configured for `/`, `/docs`, or `gh-pages`) always serves the live app
+  const docsDir = path.join(__dirname, 'docs');
+  if (!fs.existsSync(docsDir)) {
+    fs.mkdirSync(docsDir, { recursive: true });
   }
-  fs.writeFileSync(path.join(__dirname, '.nojekyll'), '');
+  for (const targetDir of [__dirname, docsDir]) {
+    for (const asset of ['index.html', 'bundle.js', 'bundle.css', 'favicon.ico']) {
+      const src = path.join(PUBLIC_DIR, asset);
+      const dest = path.join(targetDir, asset);
+      if (fs.existsSync(src)) {
+        fs.copyFileSync(src, dest);
+      }
+    }
+    fs.writeFileSync(path.join(targetDir, '.nojekyll'), '');
+  }
 }
 
 await buildBundle();

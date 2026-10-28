@@ -88,7 +88,7 @@ export function ExecutiveSedanGraphic({ className = 'dmg-sedan-svg' }) {
 }
 
 /**
- * 1. Top 4 KPI Summary Cards (Zero-state aware for brand new accounts)
+ * 1. Top 4 KPI Summary Cards (Zero-state aware & mobile responsive)
  */
 export default function Summary({
   summary,
@@ -232,7 +232,7 @@ export default function Summary({
 }
 
 /**
- * 2. Recent Transactions Card
+ * 2. Recent Transactions Card (Overlap-free responsive layout)
  */
 export function RecentTransactionsCard({
   transactions = [],
@@ -293,17 +293,21 @@ export function RecentTransactionsCard({
         ) : (
           displayed.map((tx) => {
             const isIncome = tx.txType === 'income';
+            const formattedDate = formatDateDisplay(tx.date);
             return (
               <div key={tx.id} className="dmg-tx-row">
                 <div className="dmg-tx-left">
                   {renderTxBadge(tx)}
                   <div className="dmg-tx-meta">
                     <div className="dmg-tx-title">{tx.displayTitle}</div>
-                    <div className="dmg-tx-subtitle">{tx.displaySubtitle}</div>
+                    <div className="dmg-tx-subtitle">
+                      {tx.displaySubtitle}
+                      <span className="dmg-tx-date-inline"> • {formattedDate}</span>
+                    </div>
                   </div>
                 </div>
 
-                <div className="dmg-tx-date">{formatDateDisplay(tx.date)}</div>
+                <div className="dmg-tx-date">{formattedDate}</div>
 
                 <div className="dmg-tx-right">
                   <span
@@ -335,7 +339,7 @@ export function RecentTransactionsCard({
 }
 
 /**
- * 3. Mileage Overview Card (Zero-state aware)
+ * 3. Mileage Overview Card (Zero-state & mobile responsive)
  */
 export function MileageOverviewCard({
   mileageStats,

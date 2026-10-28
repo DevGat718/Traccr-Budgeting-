@@ -417,6 +417,13 @@ export default function Dashboard({
         {/* TOP UTILITY BAR */}
         <header className="dmg-topbar">
           <div className="dmg-topbar-left">
+            <div
+              className="dmg-mobile-brand"
+              onClick={() => setActiveTab('dashboard')}
+            >
+              <DmgBrandLogo size="small" />
+            </div>
+
             <button
               type="button"
               className="dmg-collapse-btn"
@@ -714,6 +721,7 @@ export default function Dashboard({
                                   <div className="dmg-tx-title">{inc.title}</div>
                                   <div className="dmg-tx-subtitle">
                                     {inc.source} {inc.notes ? `• ${inc.notes}` : ''}
+                                    <span className="dmg-tx-date-inline"> • {formatDateDisplay(inc.date)}</span>
                                   </div>
                                 </div>
                               </div>
@@ -1010,9 +1018,8 @@ export default function Dashboard({
                                     </div>
                                     <div className="dmg-tx-subtitle">
                                       <strong>{log.vehicle || 'Vehicle'}</strong> •{' '}
-                                      {log.purpose} • Fuel: {log.fuelUsed} gal (
-                                      {formatCurrency(log.fuelCost)}) •{' '}
-                                      <strong>{eff} mpg</strong>
+                                      {log.purpose} • {eff} mpg
+                                      <span className="dmg-tx-date-inline"> • {formatDateDisplay(log.date)}</span>
                                     </div>
                                   </div>
                                 </div>
@@ -1728,7 +1735,7 @@ export default function Dashboard({
 
         {/* MOBILE BOTTOM NAVIGATION BAR */}
         <nav className="dmg-mobile-bottom-nav">
-          {navItems.slice(0, 6).map((item) => (
+          {navItems.map((item) => (
             <button
               key={item.id}
               type="button"
@@ -1736,7 +1743,7 @@ export default function Dashboard({
               onClick={() => setActiveTab(item.id)}
             >
               {renderNavIcon(item.icon)}
-              <span>{item.label}</span>
+              <span>{item.id === 'dashboard' ? 'Home' : item.id === 'settings' ? 'Profile' : item.label}</span>
             </button>
           ))}
         </nav>
