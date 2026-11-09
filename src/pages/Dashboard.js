@@ -1648,16 +1648,22 @@ export default function Dashboard({
                         type="button"
                         className="dmg-btn-secondary-light"
                         onClick={async () => {
-                          await sendTraccrVerificationEmail({
+                          const res = await sendTraccrVerificationEmail({
                             email: settings.email || authUser?.email,
                             userName: settings.userName,
                             uid: authUser?.uid,
                           });
                           setShowWelcomeEmailBanner(true);
-                          setStatusBanner(
-                            `Verification email dispatched to ${settings.email || authUser?.email}`
-                          );
-                          setTimeout(() => setStatusBanner(''), 4000);
+                          if (res.sent) {
+                            setStatusBanner(
+                              `Firebase verification email sent to ${
+                                settings.email || authUser?.email
+                              }! Check your Inbox and Spam/Junk folder.`
+                            );
+                          } else {
+                            setStatusBanner(`Notice: ${res.reason}`);
+                          }
+                          setTimeout(() => setStatusBanner(''), 8000);
                         }}
                       >
                         Send Verification Email

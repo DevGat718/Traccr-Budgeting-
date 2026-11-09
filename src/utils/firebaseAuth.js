@@ -35,25 +35,50 @@ export async function sendTraccrVerificationEmail({
   const fbConfig = getFirebaseConfig();
   const activeToken = idToken || (await getValidFirebaseIdToken());
 
+  if (!fbConfig || !fbConfig.apiKey) {
+    return {
+      sent: false,
+      email: cleanEmail,
+      reason:
+        'Firebase Cloud API key is not active on this build yet (check GitHub Settings → Pages → Source is set to "GitHub Actions").',
+    };
+  }
+
+  if (!activeToken) {
+    return {
+      sent: false,
+      email: cleanEmail,
+      reason:
+        'This account was created before Firebase Cloud was connected. Please Log Out and Log Back In (or Sign Up a new account) to trigger the verification email.',
+    };
+  }
+
+  let firebaseDispatched = false;
+  let firebaseError = '';
+
   // 1. Trigger Firebase Authentication Verification Email (sendOobCode)
-  if (fbConfig && fbConfig.apiKey && activeToken) {
-    try {
-      await fetch(
-        `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${encodeURIComponent(
-          fbConfig.apiKey
-        )}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            requestType: 'VERIFY_EMAIL',
-            idToken: activeToken,
-          }),
-        }
-      );
-    } catch (err) {
-      console.warn('Firebase sendOobCode verification email dispatch:', err);
+  try {
+    const res = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${encodeURIComponent(
+        fbConfig.apiKey
+      )}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          requestType: 'VERIFY_EMAIL',
+          idToken: activeToken,
+        }),
+      }
+    );
+    const data = await res.json();
+    if (res.ok) {
+      firebaseDispatched = true;
+    } else {
+      firebaseError = data?.error?.message || 'Firebase rejected sendOobCode request.';
     }
+  } catch (err) {
+    firebaseError = err.message || 'Network error contacting Firebase Auth.';
   }
 
   // 2. Queue custom welcome message in Cloud Firestore `traccr_mail` collection
@@ -97,8 +122,9 @@ export async function sendTraccrVerificationEmail({
   }
 
   return {
-    sent: true,
+    sent: firebaseDispatched,
     email: cleanEmail,
+    reason: firebaseError,
     message: WELCOME_VERIFICATION_MESSAGE,
     sentAt: new Date().toISOString(),
   };
