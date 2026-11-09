@@ -32,10 +32,10 @@ jobs:
           TRACCR_FIREBASE_API_KEY: ${{ secrets.TRACCR_FIREBASE_API_KEY }}
           TRACCR_FIREBASE_AUTH_DOMAIN: ${{ secrets.TRACCR_FIREBASE_AUTH_DOMAIN }}
           TRACCR_FIREBASE_PROJECT_ID: ${{ secrets.TRACCR_FIREBASE_PROJECT_ID }}
-          TRACCR_FIREBASE_FALLBACK_PROJECT_ID: ${{ secrets.TRACCR_FIREBASE_FALLBACK_PROJECT_ID }}
+          TRACCR_FIREBASE_FALLBACK_PROJECT_ID: ${{ secrets.TRACCR_FIREBASE_FALLBACK_PROJECT_ID || 'tracer-dmg' }}
         run: |
-          npm ci --ignore-scripts || true
-          node server.js --build || true
+          npm install --no-audit --no-fund
+          node server.js --build
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact
