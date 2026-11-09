@@ -390,10 +390,20 @@ export async function signInTraccrUser({ email, password }) {
                 idToken: migData.idToken || '',
                 refreshToken: migData.refreshToken || '',
               });
+              await sendTraccrVerificationEmail({
+                email: cleanEmail,
+                userName: localExisting.userName || cleanEmail.split('@')[0],
+                idToken: migData.idToken,
+                uid: migData.localId,
+              });
               await syncAccountToFirestore(localExisting.uid, migData.idToken);
               await syncAccountToFirestore(migData.localId, migData.idToken);
             }
-            const migratedSession = { ...localExisting, provider: 'firebase' };
+            const migratedSession = {
+              ...localExisting,
+              provider: 'firebase',
+              justSignedUp: true,
+            };
             delete migratedSession.password;
             delete migratedSession.passwordHash;
             delete migratedSession.salt;
