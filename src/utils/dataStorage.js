@@ -678,16 +678,137 @@ export function saveRegisteredUsers(users) {
   safeSet(GLOBAL_KEYS.USERS_DB, users);
 }
 
+const DEFAULT_FIREBASE_CONFIG = {
+  apiKey: '',
+  authDomain: '',
+  projectId: '',
+};
+
 export function getFirebaseConfig() {
-  return safeGet(GLOBAL_KEYS.FIREBASE_CONFIG, {
-    apiKey: '',
-    authDomain: '',
-    projectId: '',
-  });
+  const stored = safeGet(GLOBAL_KEYS.FIREBASE_CONFIG, null);
+  if (stored && stored.apiKey) {
+    return stored;
+  }
+  return DEFAULT_FIREBASE_CONFIG;
 }
 
 export function saveFirebaseConfig(cfg) {
   safeSet(GLOBAL_KEYS.FIREBASE_CONFIG, cfg);
+}
+
+/**
+ * Syncs a user's profile and financial/mileage dataset to Cloud Firestore
+ * (`traccr_accounts/{uid}`) so logging in from any device (phone, computer, tablet)
+ * restores the exact same account and data.
+ */
+export async function syncAccountToFirestore(uid, idToken = '') {
+  if (!uid || uid === DEMO_USER_UID) return false;
+  const fbConfig = getFirebaseConfig();
+  if (!fbConfig || !fbConfig.projectId) return false;
+
+  try {
+    const users = getRegisteredUsers();
+    const userProfile = users.find((u) => u.uid === uid) || loadAuthSession() || { uid };
+    const safeProfile = { ...userProfile };
+    delete safeProfile.password;
+    delete safeProfile.passwordHash;
+    delete safeProfile.salt;
+
+    const snapshot = {
+      profile: safeProfile,
+      incomes: safeGet(getUserKey(uid, 'incomes'), []),
+      expenses: safeGet(getUserKey(uid, 'expenses'), []),
+      mileageLogs: safeGet(getUserKey(uid, 'mileage'), []),
+      goals: safeGet(getUserKey(uid, 'goals'), []),
+      vehicles: safeGet(getUserKey(uid, 'vehicles'), []),
+      settings: safeGet(getUserKey(uid, 'settings'), {}),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+      fbConfig.projectId
+    )}/databases/(default)/documents/traccr_accounts/${encodeURIComponent(uid)}`;
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (idToken) {
+      headers.Authorization = `Bearer ${idToken}`;
+    }
+
+    await fetch(url, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({
+        fields: {
+          uid: { stringValue: String(uid) },
+          email: { stringValue: String(safeProfile.email || '') },
+          payloadJson: { stringValue: JSON.stringify(snapshot) },
+          updatedAt: { stringValue: snapshot.updatedAt },
+        },
+      }),
+    });
+    return true;
+  } catch (err) {
+    console.warn('Cloud Firestore sync skipped:', err);
+    return false;
+  }
+}
+
+/**
+ * Fetches a user's profile and dataset from Cloud Firestore (`traccr_accounts/{uid}`)
+ * when signing in from another device (e.g. computer after creating account on phone)
+ * and hydrates local storage.
+ */
+export async function hydrateAccountFromFirestore(uid, idToken = '') {
+  if (!uid) return null;
+  const fbConfig = getFirebaseConfig();
+  if (!fbConfig || !fbConfig.projectId) return null;
+
+  try {
+    const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+      fbConfig.projectId
+    )}/databases/(default)/documents/traccr_accounts/${encodeURIComponent(uid)}`;
+
+    const headers = {};
+    if (idToken) {
+      headers.Authorization = `Bearer ${idToken}`;
+    }
+
+    const res = await fetch(url, { method: 'GET', headers });
+    if (!res.ok) return null;
+    const doc = await res.json();
+    const rawJson = doc?.fields?.payloadJson?.stringValue;
+    if (!rawJson) return null;
+
+    const parsed = JSON.parse(rawJson);
+    if (Array.isArray(parsed.incomes)) safeSet(getUserKey(uid, 'incomes'), parsed.incomes);
+    if (Array.isArray(parsed.expenses)) safeSet(getUserKey(uid, 'expenses'), parsed.expenses);
+    if (Array.isArray(parsed.mileageLogs)) safeSet(getUserKey(uid, 'mileage'), parsed.mileageLogs);
+    if (Array.isArray(parsed.goals)) safeSet(getUserKey(uid, 'goals'), parsed.goals);
+    if (Array.isArray(parsed.vehicles)) safeSet(getUserKey(uid, 'vehicles'), parsed.vehicles);
+    if (parsed.settings && typeof parsed.settings === 'object') {
+      safeSet(getUserKey(uid, 'settings'), parsed.settings);
+    }
+
+    if (parsed.profile && parsed.profile.email) {
+      const users = getRegisteredUsers();
+      const exists = users.some(
+        (u) => u.uid === uid || u.email.toLowerCase() === parsed.profile.email.toLowerCase()
+      );
+      const mergedUsers = exists
+        ? users.map((u) =>
+            u.uid === uid || u.email.toLowerCase() === parsed.profile.email.toLowerCase()
+              ? { ...u, ...parsed.profile, uid }
+              : u
+          )
+        : [{ ...parsed.profile, uid }, ...users];
+      saveRegisteredUsers(mergedUsers);
+    }
+
+    return parsed;
+  } catch (err) {
+    console.warn('Cloud Firestore hydrate skipped:', err);
+    return null;
+  }
 }
 
 const ALLOWED_IMAGE_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];

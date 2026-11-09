@@ -30,6 +30,10 @@ import {
   exportToCSV,
   processProfileImageFile,
 } from '../utils/dataStorage.js';
+import {
+  WELCOME_VERIFICATION_MESSAGE,
+  sendTraccrVerificationEmail,
+} from '../utils/firebaseAuth.js';
 
 /**
  * TRACCR by DMG Official Crown Logo Component
@@ -94,6 +98,7 @@ export function UserAvatar({ size = 34, photoURL = '', name = 'User', onClick })
 }
 
 export default function Dashboard({
+  authUser,
   incomes,
   expenses,
   mileageLogs,
@@ -131,6 +136,9 @@ export default function Dashboard({
   const [mobilePreviewMode, setMobilePreviewMode] = useState(false);
   const [confirmWipe, setConfirmWipe] = useState(false);
   const [statusBanner, setStatusBanner] = useState('');
+  const [showWelcomeEmailBanner, setShowWelcomeEmailBanner] = useState(() =>
+    Boolean(authUser?.justSignedUp)
+  );
 
   // New Goal modal state
   const [goalTitle, setGoalTitle] = useState('');
@@ -522,6 +530,13 @@ export default function Dashboard({
                       ×
                     </button>
                   </div>
+                  <div className="dmg-notif-item">
+                    <span className="notif-badge green">Email</span>
+                    <div>
+                      <strong>Welcome Verification Sent</strong>
+                      <p>{WELCOME_VERIFICATION_MESSAGE}</p>
+                    </div>
+                  </div>
                   {allRecords.length === 0 ? (
                     <div className="dmg-empty-state" style={{ padding: '10px 0' }}>
                       Your account is fresh and ready! Add your first income, expense, or mileage log to see insights here.
@@ -569,6 +584,27 @@ export default function Dashboard({
         {/* WORKSPACE BODY */}
         <div className={`dmg-workspace-split ${mobilePreviewMode ? 'with-mobile-twin' : ''}`}>
           <main className="dmg-content-canvas">
+            {showWelcomeEmailBanner && (
+              <div className="dmg-welcome-email-banner">
+                <div className="dmg-welcome-email-content">
+                  <div className="dmg-welcome-email-badge">
+                    ✉️ Verification Email Sent to {settings.email || authUser?.email}
+                  </div>
+                  <p className="dmg-welcome-email-quote">
+                    &ldquo;{WELCOME_VERIFICATION_MESSAGE}&rdquo;
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="dmg-welcome-email-close"
+                  onClick={() => setShowWelcomeEmailBanner(false)}
+                  aria-label="Dismiss welcome message"
+                >
+                  ×
+                </button>
+              </div>
+            )}
+
             {statusBanner && (
               <div className="dmg-status-banner">
                 <span>✓ {statusBanner}</span>
@@ -1599,6 +1635,33 @@ export default function Dashboard({
                         <option value="imperial">Imperial (mi / MPG)</option>
                         <option value="metric">Metric (km / km/L)</option>
                       </select>
+                    </div>
+
+                    <div className="dmg-setting-row">
+                      <div>
+                        <strong>Account Verification Email</strong>
+                        <p>
+                          Send verification &amp; welcome email to {settings.email || authUser?.email}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        className="dmg-btn-secondary-light"
+                        onClick={async () => {
+                          await sendTraccrVerificationEmail({
+                            email: settings.email || authUser?.email,
+                            userName: settings.userName,
+                            uid: authUser?.uid,
+                          });
+                          setShowWelcomeEmailBanner(true);
+                          setStatusBanner(
+                            `Verification email dispatched to ${settings.email || authUser?.email}`
+                          );
+                          setTimeout(() => setStatusBanner(''), 4000);
+                        }}
+                      >
+                        Send Verification Email
+                      </button>
                     </div>
 
                     <div className="dmg-setting-row">

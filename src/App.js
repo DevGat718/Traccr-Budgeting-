@@ -13,6 +13,7 @@ import {
   saveAuthUser,
   wipeUserAccountData,
   resetToDemoData,
+  syncAccountToFirestore,
 } from './utils/dataStorage.js';
 import { updateAuthenticatedUserProfile } from './utils/firebaseAuth.js';
 import {
@@ -63,8 +64,11 @@ export default function App() {
   }, [currentUid, vehicles]);
 
   useEffect(() => {
-    if (currentUid) saveSettings(currentUid, settings);
-  }, [currentUid, settings]);
+    if (currentUid) {
+      saveSettings(currentUid, settings);
+      syncAccountToFirestore(currentUid);
+    }
+  }, [currentUid, incomes, expenses, mileageLogs, goals, vehicles, settings]);
 
   const selectedMonth = settings.selectedMonth || getCurrentYearMonth();
 
@@ -215,6 +219,7 @@ export default function App() {
 
   return (
     <Dashboard
+      authUser={authUser}
       incomes={incomes}
       expenses={expenses}
       mileageLogs={mileageLogs}
