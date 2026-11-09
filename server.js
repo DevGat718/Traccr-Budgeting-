@@ -34,6 +34,18 @@ async function buildBundle() {
     },
     define: {
       'process.env.NODE_ENV': '"production"',
+      'process.env.TRACCR_FIREBASE_API_KEY': JSON.stringify(
+        process.env.TRACCR_FIREBASE_API_KEY || ''
+      ),
+      'process.env.TRACCR_FIREBASE_AUTH_DOMAIN': JSON.stringify(
+        process.env.TRACCR_FIREBASE_AUTH_DOMAIN || ''
+      ),
+      'process.env.TRACCR_FIREBASE_PROJECT_ID': JSON.stringify(
+        process.env.TRACCR_FIREBASE_PROJECT_ID || ''
+      ),
+      'process.env.TRACCR_FIREBASE_FALLBACK_PROJECT_ID': JSON.stringify(
+        process.env.TRACCR_FIREBASE_FALLBACK_PROJECT_ID || ''
+      ),
     },
     minify: true,
     sourcemap: false,

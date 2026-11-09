@@ -13,10 +13,13 @@ import {
   wipeUserAccountData,
   syncAccountToFirestore,
   hydrateAccountFromFirestore,
+  saveFirebaseSessionTokens,
+  getValidFirebaseIdToken,
+  getCandidateProjectIds,
 } from './dataStorage.js';
 
 export const WELCOME_VERIFICATION_MESSAGE =
-  'Congratulations. Thank you for signing up with TRACCR!  You are one step closer to reaching your financial goals and building future wealth.';
+  'Congratulations. Thank you for signing up with TRACCR! You are one step closer to reaching your financial goals and building future wealth.';
 
 /**
  * Dispatches the TRACCR verification & welcome email to a newly registered user
@@ -30,9 +33,10 @@ export async function sendTraccrVerificationEmail({
 }) {
   const cleanEmail = String(email || '').trim().toLowerCase();
   const fbConfig = getFirebaseConfig();
+  const activeToken = idToken || (await getValidFirebaseIdToken());
 
   // 1. Trigger Firebase Authentication Verification Email (sendOobCode)
-  if (fbConfig && fbConfig.apiKey && idToken) {
+  if (fbConfig && fbConfig.apiKey && activeToken) {
     try {
       await fetch(
         `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${encodeURIComponent(
@@ -43,7 +47,7 @@ export async function sendTraccrVerificationEmail({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             requestType: 'VERIFY_EMAIL',
-            idToken,
+            idToken: activeToken,
           }),
         }
       );
@@ -56,33 +60,37 @@ export async function sendTraccrVerificationEmail({
   if (fbConfig && fbConfig.projectId && cleanEmail) {
     try {
       const headers = { 'Content-Type': 'application/json' };
-      if (idToken) {
-        headers.Authorization = `Bearer ${idToken}`;
+      if (activeToken) {
+        headers.Authorization = `Bearer ${activeToken}`;
       }
-      await fetch(
-        `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
-          fbConfig.projectId
-        )}/databases/(default)/documents/traccr_mail`,
-        {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            fields: {
-              to: { stringValue: cleanEmail },
-              uid: { stringValue: String(uid || '') },
-              userName: { stringValue: String(userName || '') },
-              subject: {
-                stringValue: 'Welcome to TRACCR by DMG Official — Verify Your Account',
-              },
-              text: { stringValue: WELCOME_VERIFICATION_MESSAGE },
-              html: {
-                stringValue: `<div style="font-family:Inter,Arial,sans-serif;background:#0c0e12;color:#ffffff;padding:28px;border-radius:16px;border:1px solid #22c55e;"><h2 style="color:#22c55e;margin-top:0;">TRACCR by DMG Official</h2><p style="font-size:16px;line-height:1.6;color:#f8fafc;">${WELCOME_VERIFICATION_MESSAGE}</p><p style="font-size:12px;color:#94a3b8;margin-top:20px;">TRACK TODAY. BUILD TOMORROW.</p></div>`,
-              },
-              createdAt: { stringValue: new Date().toISOString() },
-            },
-          }),
-        }
-      );
+      const mailBody = JSON.stringify({
+        fields: {
+          to: { stringValue: cleanEmail },
+          uid: { stringValue: String(uid || '') },
+          userName: { stringValue: String(userName || '') },
+          subject: {
+            stringValue: 'Congratulations! Welcome to TRACCR by DMG Official',
+          },
+          text: { stringValue: WELCOME_VERIFICATION_MESSAGE },
+          html: {
+            stringValue: `<div style="font-family:Inter,Arial,sans-serif;background:#0c0e12;color:#ffffff;padding:28px;border-radius:16px;border:1px solid #22c55e;"><h2 style="color:#22c55e;margin-top:0;">TRACCR by DMG Official</h2><p style="font-size:16px;line-height:1.6;color:#f8fafc;">${WELCOME_VERIFICATION_MESSAGE}</p><p style="font-size:12px;color:#94a3b8;margin-top:20px;">TRACK TODAY. BUILD TOMORROW.</p></div>`,
+          },
+          createdAt: { stringValue: new Date().toISOString() },
+        },
+      });
+      for (const pid of getCandidateProjectIds(fbConfig)) {
+        const res = await fetch(
+          `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+            pid
+          )}/databases/(default)/documents/traccr_mail`,
+          {
+            method: 'POST',
+            headers,
+            body: mailBody,
+          }
+        );
+        if (res.ok) break;
+      }
     } catch (err) {
       console.warn('Firestore traccr_mail welcome record skipped:', err);
     }
@@ -185,10 +193,19 @@ export async function registerTraccrUser({
       );
       const data = await res.json();
       if (!res.ok && data?.error?.message) {
+        if (data.error.message.includes('EMAIL_EXISTS')) {
+          throw new Error(
+            'An account with this email address already exists in TRACCR Cloud. Please switch to "Log In".'
+          );
+        }
         throw new Error(`Firebase Auth: ${data.error.message}`);
       }
       firebaseUid = data.localId;
       firebaseIdToken = data.idToken || '';
+      saveFirebaseSessionTokens({
+        idToken: firebaseIdToken,
+        refreshToken: data.refreshToken || '',
+      });
 
       // Update Firebase Auth profile with displayName
       if (firebaseIdToken) {
@@ -294,6 +311,10 @@ export async function signInTraccrUser({ email, password }) {
       );
       const data = await res.json();
       if (res.ok && data.localId) {
+        saveFirebaseSessionTokens({
+          idToken: data.idToken || '',
+          refreshToken: data.refreshToken || '',
+        });
         // Hydrate cross-device profile & data from Cloud Firestore
         const cloudAccount = await hydrateAccountFromFirestore(data.localId, data.idToken);
         const users = getRegisteredUsers();
@@ -341,7 +362,46 @@ export async function signInTraccrUser({ email, password }) {
         saveAuthUser(sessionUser);
         return sessionUser;
       } else if (data?.error?.message) {
-        // Check if this is the built-in Demo user before throwing
+        // Check if this account was created locally on this device before Firebase Cloud was connected.
+        // If the local password hash matches, auto-migrate it to Firebase Cloud so it works on all devices!
+        const localUsers = getRegisteredUsers();
+        const localExisting = localUsers.find((u) => u.email.toLowerCase() === cleanEmail);
+        if (localExisting && localExisting.passwordHash && localExisting.salt) {
+          const candidateHash = await hashPasswordWithSalt(password, localExisting.salt);
+          if (candidateHash === localExisting.passwordHash) {
+            const migRes = await fetch(
+              `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${encodeURIComponent(
+                fbConfig.apiKey
+              )}`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  email: cleanEmail,
+                  password,
+                  displayName: localExisting.userName || cleanEmail.split('@')[0],
+                  returnSecureToken: true,
+                }),
+              }
+            );
+            const migData = await migRes.json();
+            if (migRes.ok && migData.localId) {
+              saveFirebaseSessionTokens({
+                idToken: migData.idToken || '',
+                refreshToken: migData.refreshToken || '',
+              });
+              await syncAccountToFirestore(localExisting.uid, migData.idToken);
+              await syncAccountToFirestore(migData.localId, migData.idToken);
+            }
+            const migratedSession = { ...localExisting, provider: 'firebase' };
+            delete migratedSession.password;
+            delete migratedSession.passwordHash;
+            delete migratedSession.salt;
+            saveAuthUser(migratedSession);
+            return migratedSession;
+          }
+        }
+
         if (cleanEmail !== DEFAULT_USER_PROFILE.email.toLowerCase()) {
           throw new Error('Invalid email or password.');
         }
