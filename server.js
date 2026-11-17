@@ -39,10 +39,21 @@ const FIREBASE_ENV_KEYS = [
   'TRACCR_FIREBASE_APP_ID',
 ];
 
+// Tolerate secrets pasted as `"value"`, `'value',` or with trailing spaces
+function cleanEnvValue(v) {
+  return String(v || '')
+    .trim()
+    .replace(/,$/, '')
+    .trim()
+    .replace(/^['"`]+|['"`]+$/g, '')
+    .trim();
+}
+
 async function buildBundle() {
   const define = { 'process.env.NODE_ENV': '"production"' };
   for (const key of FIREBASE_ENV_KEYS) {
-    define[`process.env.${key}`] = JSON.stringify((process.env[key] || '').trim());
+    process.env[key] = cleanEnvValue(process.env[key]);
+    define[`process.env.${key}`] = JSON.stringify(process.env[key]);
   }
 
   await esbuild.build({
