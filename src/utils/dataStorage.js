@@ -1,21 +1,40 @@
 /**
  * TRACCR by DMG Official
- * Per-Account Persistence, Empty-State Initialization for New Users,
- * Demo Account Seed Data, and "Wipe All Data" Support.
+ * Local storage is used ONLY for the offline Demo account.
+ * Real accounts live in Firebase (see firebaseAuth.js / cloudSync.js).
  */
 
 import { getCurrentYearMonth } from './calculate.js';
 
 const GLOBAL_KEYS = {
-  AUTH_USER: 'traccr_dmg_v3_auth_user',
-  USERS_DB: 'traccr_dmg_v3_users_db',
-  FIREBASE_CONFIG: 'traccr_dmg_v3_firebase_config',
+  AUTH_USER: 'traccr_dmg_v4_demo_session',
 };
 
 function getUserKey(uid, field) {
   const safeUid = uid || 'guest';
-  return `traccr_dmg_v3_user_${safeUid}_${field}`;
+  return `traccr_dmg_v4_user_${safeUid}_${field}`;
 }
+
+/**
+ * One-time wipe of all legacy (v1–v3) browser-only accounts and data.
+ * Those accounts were never in the cloud, which is why they didn't work across devices.
+ */
+(function purgeLegacyLocalData() {
+  try {
+    const ls = window.localStorage;
+    if (ls.getItem('traccr_v4_legacy_purged') === '1') return;
+    const doomed = [];
+    for (let i = 0; i < ls.length; i++) {
+      const k = ls.key(i);
+      if (k && (k.startsWith('traccr_dmg_v') || k.startsWith('dmg_traccr')) && !k.startsWith('traccr_dmg_v4_')) {
+        doomed.push(k);
+      }
+    }
+    doomed.forEach((k) => ls.removeItem(k));
+    window.sessionStorage.removeItem('traccr_dmg_v3_fb_session_tokens');
+    ls.setItem('traccr_v4_legacy_purged', '1');
+  } catch (_) {}
+})();
 
 export const DEMO_USER_UID = 'usr-dmg-official-demo';
 
@@ -659,230 +678,8 @@ export function resetToDemoData(user) {
 export function saveAuthUser(user) {
   if (!user) {
     window.localStorage.removeItem(GLOBAL_KEYS.AUTH_USER);
-    saveFirebaseSessionTokens({ idToken: '', refreshToken: '' });
   } else {
     safeSet(GLOBAL_KEYS.AUTH_USER, user);
-  }
-}
-
-export function getRegisteredUsers() {
-  const existing = safeGet(GLOBAL_KEYS.USERS_DB, null);
-  if (existing && Array.isArray(existing) && existing.length > 0) {
-    return existing;
-  }
-  const seedUsers = [{ ...DEFAULT_USER_PROFILE }];
-  safeSet(GLOBAL_KEYS.USERS_DB, seedUsers);
-  return seedUsers;
-}
-
-export function saveRegisteredUsers(users) {
-  safeSet(GLOBAL_KEYS.USERS_DB, users);
-}
-
-const DEFAULT_FIREBASE_CONFIG = {
-  apiKey: process.env.TRACCR_FIREBASE_API_KEY || '',
-  authDomain: process.env.TRACCR_FIREBASE_AUTH_DOMAIN || '',
-  projectId: process.env.TRACCR_FIREBASE_PROJECT_ID || '',
-  fallbackProjectId: process.env.TRACCR_FIREBASE_FALLBACK_PROJECT_ID || '',
-};
-
-export function getCandidateProjectIds(fbConfig = getFirebaseConfig()) {
-  return Array.from(
-    new Set([fbConfig?.projectId, fbConfig?.fallbackProjectId].filter(Boolean))
-  );
-}
-
-const SESSION_TOKEN_KEY = 'traccr_dmg_v3_fb_session_tokens';
-
-export function saveFirebaseSessionTokens({ idToken = '', refreshToken = '' }) {
-  try {
-    if (!idToken && !refreshToken) {
-      window.sessionStorage.removeItem(SESSION_TOKEN_KEY);
-      return;
-    }
-    window.sessionStorage.setItem(
-      SESSION_TOKEN_KEY,
-      JSON.stringify({
-        idToken,
-        refreshToken,
-        savedAt: Date.now(),
-      })
-    );
-  } catch (_) {}
-}
-
-export async function getValidFirebaseIdToken() {
-  try {
-    const raw = window.sessionStorage.getItem(SESSION_TOKEN_KEY);
-    if (!raw) return '';
-    const parsed = JSON.parse(raw);
-    const ageMs = Date.now() - (parsed.savedAt || 0);
-    // Firebase ID tokens last 3600s (60 mins); refresh if older than 50 mins
-    if (parsed.idToken && ageMs < 50 * 60 * 1000) {
-      return parsed.idToken;
-    }
-    const fbConfig = getFirebaseConfig();
-    if (parsed.refreshToken && fbConfig?.apiKey) {
-      const res = await fetch(
-        `https://securetoken.googleapis.com/v1/token?key=${encodeURIComponent(fbConfig.apiKey)}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(parsed.refreshToken)}`,
-        }
-      );
-      if (res.ok) {
-        const data = await res.json();
-        if (data.id_token) {
-          saveFirebaseSessionTokens({
-            idToken: data.id_token,
-            refreshToken: data.refresh_token || parsed.refreshToken,
-          });
-          return data.id_token;
-        }
-      }
-    }
-    return parsed.idToken || '';
-  } catch (_) {
-    return '';
-  }
-}
-
-export function getFirebaseConfig() {
-  const stored = safeGet(GLOBAL_KEYS.FIREBASE_CONFIG, null);
-  if (stored && stored.apiKey && stored.projectId) {
-    return stored;
-  }
-  return DEFAULT_FIREBASE_CONFIG;
-}
-
-export function saveFirebaseConfig(cfg) {
-  safeSet(GLOBAL_KEYS.FIREBASE_CONFIG, cfg);
-}
-
-/**
- * Syncs a user's profile and financial/mileage dataset to Cloud Firestore
- * (`traccr_accounts/{uid}`) so logging in from any device (phone, computer, tablet)
- * restores the exact same account and data.
- */
-export async function syncAccountToFirestore(uid, idToken = '') {
-  if (!uid || uid === DEMO_USER_UID) return false;
-  const fbConfig = getFirebaseConfig();
-  if (!fbConfig || !fbConfig.projectId) return false;
-
-  try {
-    const token = idToken || (await getValidFirebaseIdToken());
-    const users = getRegisteredUsers();
-    const userProfile = users.find((u) => u.uid === uid) || loadAuthSession() || { uid };
-    const safeProfile = { ...userProfile };
-    delete safeProfile.password;
-    delete safeProfile.passwordHash;
-    delete safeProfile.salt;
-
-    const snapshot = {
-      profile: safeProfile,
-      incomes: safeGet(getUserKey(uid, 'incomes'), []),
-      expenses: safeGet(getUserKey(uid, 'expenses'), []),
-      mileageLogs: safeGet(getUserKey(uid, 'mileage'), []),
-      goals: safeGet(getUserKey(uid, 'goals'), []),
-      vehicles: safeGet(getUserKey(uid, 'vehicles'), []),
-      settings: safeGet(getUserKey(uid, 'settings'), {}),
-      updatedAt: new Date().toISOString(),
-    };
-
-    const headers = { 'Content-Type': 'application/json' };
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
-    }
-
-    const bodyPayload = JSON.stringify({
-      fields: {
-        uid: { stringValue: String(uid) },
-        email: { stringValue: String(safeProfile.email || '') },
-        payloadJson: { stringValue: JSON.stringify(snapshot) },
-        updatedAt: { stringValue: snapshot.updatedAt },
-      },
-    });
-
-    for (const pid of getCandidateProjectIds(fbConfig)) {
-      const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
-        pid
-      )}/databases/(default)/documents/traccr_accounts/${encodeURIComponent(uid)}`;
-      const res = await fetch(url, {
-        method: 'PATCH',
-        headers,
-        body: bodyPayload,
-      });
-      if (res.ok) return true;
-    }
-    return false;
-  } catch (err) {
-    console.warn('Cloud Firestore sync skipped:', err);
-    return false;
-  }
-}
-
-/**
- * Fetches a user's profile and dataset from Cloud Firestore (`traccr_accounts/{uid}`)
- * when signing in from another device (e.g. computer after creating account on phone)
- * and hydrates local storage.
- */
-export async function hydrateAccountFromFirestore(uid, idToken = '') {
-  if (!uid) return null;
-  const fbConfig = getFirebaseConfig();
-  if (!fbConfig || !fbConfig.projectId) return null;
-
-  try {
-    const token = idToken || (await getValidFirebaseIdToken());
-    const headers = {};
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
-    }
-
-    let doc = null;
-    for (const pid of getCandidateProjectIds(fbConfig)) {
-      const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
-        pid
-      )}/databases/(default)/documents/traccr_accounts/${encodeURIComponent(uid)}`;
-      const res = await fetch(url, { method: 'GET', headers });
-      if (res.ok) {
-        doc = await res.json();
-        break;
-      }
-    }
-    if (!doc) return null;
-    const rawJson = doc?.fields?.payloadJson?.stringValue;
-    if (!rawJson) return null;
-
-    const parsed = JSON.parse(rawJson);
-    if (Array.isArray(parsed.incomes)) safeSet(getUserKey(uid, 'incomes'), parsed.incomes);
-    if (Array.isArray(parsed.expenses)) safeSet(getUserKey(uid, 'expenses'), parsed.expenses);
-    if (Array.isArray(parsed.mileageLogs)) safeSet(getUserKey(uid, 'mileage'), parsed.mileageLogs);
-    if (Array.isArray(parsed.goals)) safeSet(getUserKey(uid, 'goals'), parsed.goals);
-    if (Array.isArray(parsed.vehicles)) safeSet(getUserKey(uid, 'vehicles'), parsed.vehicles);
-    if (parsed.settings && typeof parsed.settings === 'object') {
-      safeSet(getUserKey(uid, 'settings'), parsed.settings);
-    }
-
-    if (parsed.profile && parsed.profile.email) {
-      const users = getRegisteredUsers();
-      const exists = users.some(
-        (u) => u.uid === uid || u.email.toLowerCase() === parsed.profile.email.toLowerCase()
-      );
-      const mergedUsers = exists
-        ? users.map((u) =>
-            u.uid === uid || u.email.toLowerCase() === parsed.profile.email.toLowerCase()
-              ? { ...u, ...parsed.profile, uid }
-              : u
-          )
-        : [{ ...parsed.profile, uid }, ...users];
-      saveRegisteredUsers(mergedUsers);
-    }
-
-    return parsed;
-  } catch (err) {
-    console.warn('Cloud Firestore hydrate skipped:', err);
-    return null;
   }
 }
 

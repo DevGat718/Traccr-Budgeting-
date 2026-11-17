@@ -32,7 +32,7 @@ import {
 } from '../utils/dataStorage.js';
 import {
   WELCOME_VERIFICATION_MESSAGE,
-  sendTraccrVerificationEmail,
+  runCloudDiagnostics,
 } from '../utils/firebaseAuth.js';
 
 /**
@@ -99,6 +99,7 @@ export function UserAvatar({ size = 34, photoURL = '', name = 'User', onClick })
 
 export default function Dashboard({
   authUser,
+  syncState,
   incomes,
   expenses,
   mileageLogs,
@@ -139,6 +140,21 @@ export default function Dashboard({
   const [showWelcomeEmailBanner, setShowWelcomeEmailBanner] = useState(() =>
     Boolean(authUser?.justSignedUp)
   );
+  const signupEmailResult = authUser?.signupEmailResult || null;
+  const [diagRunning, setDiagRunning] = useState(false);
+  const [diagSteps, setDiagSteps] = useState([]);
+
+  const handleRunDiagnostics = async (sendEmail) => {
+    setDiagRunning(true);
+    setDiagSteps([]);
+    try {
+      setDiagSteps(await runCloudDiagnostics({ sendEmail }));
+    } catch (err) {
+      setDiagSteps([{ label: 'Diagnostics', status: 'fail', detail: err.message || String(err) }]);
+    } finally {
+      setDiagRunning(false);
+    }
+  };
 
   // New Goal modal state
   const [goalTitle, setGoalTitle] = useState('');
@@ -533,7 +549,7 @@ export default function Dashboard({
                   <div className="dmg-notif-item">
                     <span className="notif-badge green">Email</span>
                     <div>
-                      <strong>Welcome Verification Sent</strong>
+                      <strong>Welcome to TRACCR</strong>
                       <p>{WELCOME_VERIFICATION_MESSAGE}</p>
                     </div>
                   </div>
@@ -584,15 +600,33 @@ export default function Dashboard({
         {/* WORKSPACE BODY */}
         <div className={`dmg-workspace-split ${mobilePreviewMode ? 'with-mobile-twin' : ''}`}>
           <main className="dmg-content-canvas">
+            {syncState?.status === 'error' && syncState.error && (
+              <div className="dmg-sync-error-banner">
+                <strong>Cloud sync problem — your changes are NOT being saved to the cloud.</strong>
+                <p>
+                  {syncState.error.message} ({syncState.error.code})
+                </p>
+                {syncState.error.fix && <p>Fix: {syncState.error.fix}</p>}
+              </div>
+            )}
+
             {showWelcomeEmailBanner && (
               <div className="dmg-welcome-email-banner">
                 <div className="dmg-welcome-email-content">
                   <div className="dmg-welcome-email-badge">
-                    ✉️ Verification Email Sent to {settings.email || authUser?.email}
+                    {signupEmailResult?.sent
+                      ? `✉️ Verification email sent to ${authUser?.email}`
+                      : `⚠️ Verification email was NOT sent`}
                   </div>
                   <p className="dmg-welcome-email-quote">
                     &ldquo;{WELCOME_VERIFICATION_MESSAGE}&rdquo;
                   </p>
+                  {signupEmailResult && (
+                    <p className="dmg-welcome-email-detail">
+                      {signupEmailResult.message}
+                      {signupEmailResult.fix ? ` ${signupEmailResult.fix}` : ''}
+                    </p>
+                  )}
                 </div>
                 <button
                   type="button"
@@ -1639,36 +1673,50 @@ export default function Dashboard({
 
                     <div className="dmg-setting-row">
                       <div>
-                        <strong>Account Verification Email</strong>
+                        <strong>Email &amp; Cloud Sync Diagnostics</strong>
                         <p>
-                          Send verification &amp; welcome email to {settings.email || authUser?.email}
+                          Tests every step: Firebase config → login token → cloud save → email
+                          verification. Shows exactly what is blocked and how to fix it.
                         </p>
                       </div>
-                      <button
-                        type="button"
-                        className="dmg-btn-secondary-light"
-                        onClick={async () => {
-                          const res = await sendTraccrVerificationEmail({
-                            email: settings.email || authUser?.email,
-                            userName: settings.userName,
-                            uid: authUser?.uid,
-                          });
-                          setShowWelcomeEmailBanner(true);
-                          if (res.sent) {
-                            setStatusBanner(
-                              `Firebase verification email sent to ${
-                                settings.email || authUser?.email
-                              }! Check your Inbox and Spam/Junk folder.`
-                            );
-                          } else {
-                            setStatusBanner(`Notice: ${res.reason}`);
-                          }
-                          setTimeout(() => setStatusBanner(''), 8000);
-                        }}
-                      >
-                        Send Verification Email
-                      </button>
+                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          className="dmg-btn-secondary-light"
+                          disabled={diagRunning}
+                          onClick={() => handleRunDiagnostics(false)}
+                        >
+                          {diagRunning ? 'Testing…' : 'Run Test'}
+                        </button>
+                        <button
+                          type="button"
+                          className="dmg-btn-primary-dark"
+                          disabled={diagRunning || authUser?.isDemo}
+                          onClick={() => handleRunDiagnostics(true)}
+                        >
+                          Test + Send Verification Email
+                        </button>
+                      </div>
                     </div>
+
+                    {diagSteps.length > 0 && (
+                      <div className="dmg-diag-list">
+                        {diagSteps.map((s, i) => (
+                          <div key={i} className={`dmg-diag-step ${s.status}`}>
+                            <div className="dmg-diag-head">
+                              <span className="dmg-diag-icon">
+                                {s.status === 'pass' ? '✅' : s.status === 'fail' ? '❌' : '⚠️'}
+                              </span>
+                              <strong>{s.label}</strong>
+                            </div>
+                            <p>{s.detail}</p>
+                            {s.fix && s.status !== 'pass' && (
+                              <p className="dmg-diag-fix">Fix: {s.fix}</p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
 
                     <div className="dmg-setting-row">
                       <div>

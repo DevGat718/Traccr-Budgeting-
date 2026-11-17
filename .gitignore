@@ -14,6 +14,15 @@ design mock ups /
 # Source Maps (Never Commit)
 *.map
 
+# Build output (built + deployed only by GitHub Actions; never committed)
+/public/bundle.js
+/public/bundle.css
+/bundle.js
+/bundle.css
+/index.html
+/favicon.ico
+/docs/
+
 # Environment & Secrets (Never Commit)
 .env
 .env.*

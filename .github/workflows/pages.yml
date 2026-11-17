@@ -27,14 +27,25 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+      - name: Verify Firebase secrets are present (values are never printed)
+        env:
+          K: ${{ secrets.TRACCR_FIREBASE_API_KEY }}
+          D: ${{ secrets.TRACCR_FIREBASE_AUTH_DOMAIN }}
+          P: ${{ secrets.TRACCR_FIREBASE_PROJECT_ID }}
+        run: |
+          ok=1
+          [ -n "$K" ] && echo "TRACCR_FIREBASE_API_KEY: set" || { echo "::error::TRACCR_FIREBASE_API_KEY repository secret is MISSING or empty"; ok=0; }
+          [ -n "$D" ] && echo "TRACCR_FIREBASE_AUTH_DOMAIN: set" || { echo "::error::TRACCR_FIREBASE_AUTH_DOMAIN repository secret is MISSING or empty"; ok=0; }
+          [ -n "$P" ] && echo "TRACCR_FIREBASE_PROJECT_ID: set" || { echo "::error::TRACCR_FIREBASE_PROJECT_ID repository secret is MISSING or empty"; ok=0; }
+          [ "$ok" = 1 ] || exit 1
       - name: Build Production Bundle with Encrypted Repository Secrets
         env:
           TRACCR_FIREBASE_API_KEY: ${{ secrets.TRACCR_FIREBASE_API_KEY }}
           TRACCR_FIREBASE_AUTH_DOMAIN: ${{ secrets.TRACCR_FIREBASE_AUTH_DOMAIN }}
           TRACCR_FIREBASE_PROJECT_ID: ${{ secrets.TRACCR_FIREBASE_PROJECT_ID }}
-          TRACCR_FIREBASE_FALLBACK_PROJECT_ID: ${{ secrets.TRACCR_FIREBASE_FALLBACK_PROJECT_ID || 'tracer-dmg' }}
+          TRACCR_FIREBASE_APP_ID: ${{ secrets.TRACCR_FIREBASE_APP_ID }}
         run: |
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
           node server.js --build
       - name: Setup Pages
         uses: actions/configure-pages@v5

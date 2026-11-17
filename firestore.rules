@@ -1,0 +1,149 @@
+rules_version = '2';
+
+// ===============================================================
+// TRACCR - Cloud Firestore Security Rules (prototype - review before launch)
+// ===============================================================
+//
+// Assumed Data Model
+// ---------------------------------------------------------------
+// Collection: users
+// Document ID: Firebase Auth uid (one doc per user, owner-only)
+// Fields (top-level keys restricted to exactly this set):
+//   - uid:           string (required, immutable, == request.auth.uid)
+//   - email:         string (required, == request.auth.token.email)
+//   - profile:       map    (optional) keys restricted to:
+//                      firstName, lastName, userName (string <= 100)
+//                      email (string <= 254), phone (string <= 40)
+//                      photoURL (string <= 700,000 chars; base64 JPEG data URL ~400KB)
+//                      userRole (string <= 100; DISPLAY LABEL ONLY - never use for authz)
+//   - incomes:       list   (optional, <= 5000 items)
+//   - expenses:      list   (optional, <= 5000 items)
+//   - mileageLogs:   list   (optional, <= 5000 items)
+//   - goals:         list   (optional, <= 500 items)
+//   - vehicles:      list   (optional, <= 100 items)
+//   - settings:      map    (optional, <= 100 keys)
+//   - createdAt:     string (optional, ISO 8601, immutable once set)
+//   - updatedAt:     string (optional, ISO 8601)
+//   - schemaVersion: int    (optional, 1..1000)
+//
+// Notes:
+//   - The 1 MiB Firestore document limit bounds total payload size.
+//   - Rules cannot loop over list elements, so list item shapes are
+//     validated client-side; only type + count are enforced here.
+//   - email_verified is intentionally NOT required.
+//   - Everything else (e.g. traccr_accounts, traccr_mail) is denied.
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // -------------------------------------------------------------
+    // Helper Functions
+    // -------------------------------------------------------------
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Signed-in user is the owner of users/{userId}
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // String with a bounded length
+    function isStr(value, maxLen) {
+      return value is string && value.size() <= maxLen;
+    }
+
+    // Optional string field inside a map
+    function optStr(m, key, maxLen) {
+      return !(key in m) || isStr(m[key], maxLen);
+    }
+
+    // Optional list field with bounded size
+    function optList(data, key, maxSize) {
+      return !(key in data) || (data[key] is list && data[key].size() <= maxSize);
+    }
+
+    // Loose ISO-8601 format check (format only, not calendar logic)
+    function isIsoDate(value) {
+      return isStr(value, 40) &&
+        value.matches('^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?(Z|[+-]\\d{2}:\\d{2})$');
+    }
+
+    function optIsoDate(data, key) {
+      return !(key in data) || isIsoDate(data[key]);
+    }
+
+    // -------------------------------------------------------------
+    // Domain Validators (used in BOTH create and update)
+    // -------------------------------------------------------------
+
+    function isValidProfile(p) {
+      return p is map &&
+        p.keys().hasOnly(['firstName', 'lastName', 'userName', 'email',
+                          'phone', 'photoURL', 'userRole']) &&
+        optStr(p, 'firstName', 100) &&
+        optStr(p, 'lastName', 100) &&
+        optStr(p, 'userName', 100) &&
+        optStr(p, 'email', 254) &&
+        optStr(p, 'phone', 40) &&
+        optStr(p, 'photoURL', 700000) &&
+        optStr(p, 'userRole', 100);
+    }
+
+    function isValidUserDoc(data, userId) {
+      return data.keys().hasOnly(['uid', 'email', 'profile', 'incomes', 'expenses',
+                                  'mileageLogs', 'goals', 'vehicles', 'settings',
+                                  'createdAt', 'updatedAt', 'schemaVersion']) &&
+        data.keys().hasAll(['uid', 'email']) &&
+        // Identity bound to the auth token (never client-chosen)
+        data.uid is string && data.uid == request.auth.uid && data.uid == userId &&
+        data.email is string && data.email == request.auth.token.email &&
+        // Nested / collection fields
+        (!('profile' in data) || isValidProfile(data.profile)) &&
+        optList(data, 'incomes', 5000) &&
+        optList(data, 'expenses', 5000) &&
+        optList(data, 'mileageLogs', 5000) &&
+        optList(data, 'goals', 500) &&
+        optList(data, 'vehicles', 100) &&
+        (!('settings' in data) || (data.settings is map && data.settings.size() <= 100)) &&
+        // Metadata
+        optIsoDate(data, 'createdAt') &&
+        optIsoDate(data, 'updatedAt') &&
+        (!('schemaVersion' in data) ||
+          (data.schemaVersion is int && data.schemaVersion >= 1 && data.schemaVersion <= 1000));
+    }
+
+    // createdAt cannot change once it has been set
+    function createdAtUnchanged() {
+      return !('createdAt' in resource.data) ||
+        request.resource.data.get('createdAt', null) == resource.data.createdAt;
+    }
+
+    // -------------------------------------------------------------
+    // users/{userId} - owner-only, single-document access (no list)
+    // -------------------------------------------------------------
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+
+      allow create: if isOwner(userId) &&
+        isValidUserDoc(request.resource.data, userId);
+
+      allow update: if isOwner(userId) &&
+        isValidUserDoc(request.resource.data, userId) &&
+        resource.data.get('uid', userId) == userId &&
+        createdAtUnchanged();
+
+      allow delete: if isOwner(userId);
+    }
+
+    // -------------------------------------------------------------
+    // Default deny: every other path (incl. legacy traccr_accounts,
+    // traccr_mail, and any subcollections) is inaccessible.
+    // -------------------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

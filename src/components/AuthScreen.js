@@ -3,7 +3,9 @@ import {
   registerTraccrUser,
   signInTraccrUser,
   signInDemoUser,
+  sendTraccrPasswordReset,
 } from '../utils/firebaseAuth.js';
+import { isCloudConfigured } from '../utils/firebaseClient.js';
 import { processProfileImageFile } from '../utils/dataStorage.js';
 import { ExecutiveSedanGraphic } from './Summary.js';
 
@@ -22,6 +24,7 @@ export default function AuthScreen({ onAuthenticated }) {
   const [password, setPassword] = useState('');
   const [photoURL, setPhotoURL] = useState('');
   const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
   const [loading, setLoading] = useState(false);
 
   const fileInputRef = useRef(null);
@@ -33,17 +36,18 @@ export default function AuthScreen({ onAuthenticated }) {
       const dataUrl = await processProfileImageFile(file);
       setPhotoURL(dataUrl);
     } catch (err) {
-      setError('Could not load image file.');
+      setError(err.message || 'Could not load image file.');
     }
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    setInfo('');
     setLoading(true);
     try {
       if (mode === 'signup') {
-        const user = await registerTraccrUser({
+        const result = await registerTraccrUser({
           firstName,
           lastName,
           email,
@@ -51,15 +55,29 @@ export default function AuthScreen({ onAuthenticated }) {
           password,
           photoURL,
         });
-        onAuthenticated(user);
+        onAuthenticated({
+          ...result,
+          user: { ...result.user, signupEmailResult: result.emailResult, signupCloudError: result.cloudError },
+        });
       } else {
-        const user = await signInTraccrUser({ email, password });
-        onAuthenticated(user);
+        const result = await signInTraccrUser({ email, password });
+        onAuthenticated(result);
       }
     } catch (err) {
       setError(err.message || 'Authentication failed.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    setError('');
+    setInfo('');
+    try {
+      await sendTraccrPasswordReset(email);
+      setInfo(`If an account exists for ${email.trim()}, a password reset email is on its way. Check Inbox and Spam.`);
+    } catch (err) {
+      setError(err.message);
     }
   };
 
@@ -162,7 +180,14 @@ export default function AuthScreen({ onAuthenticated }) {
             </button>
           </div>
 
+          {!isCloudConfigured && (
+            <div className="dmg-form-error">
+              TRACCR Cloud is not connected on this build, so real accounts are disabled. The
+              Firebase GitHub Secrets are missing — see the setup checklist. (Demo mode still works.)
+            </div>
+          )}
           {error && <div className="dmg-form-error">{error}</div>}
+          {info && <div className="dmg-form-info">{info}</div>}
 
           <form onSubmit={handleSubmit} className="dmg-form-body">
             {mode === 'signup' && (
@@ -260,7 +285,13 @@ export default function AuthScreen({ onAuthenticated }) {
               />
             </div>
 
-            <button type="submit" className="dmg-submit-green" disabled={loading}>
+            {mode === 'login' && (
+              <button type="button" className="dmg-forgot-link" onClick={handleForgotPassword}>
+                Forgot password?
+              </button>
+            )}
+
+            <button type="submit" className="dmg-submit-green" disabled={loading || !isCloudConfigured}>
               {loading
                 ? 'Processing...'
                 : mode === 'login'

@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
 import Dashboard from './pages/Dashboard.js';
 import AuthScreen from './components/AuthScreen.js';
 import {
@@ -10,12 +11,21 @@ import {
   saveGoals,
   saveVehicles,
   saveSettings,
-  saveAuthUser,
-  wipeUserAccountData,
-  resetToDemoData,
-  syncAccountToFirestore,
+  buildDefaultSettingsForUser,
+  INITIAL_INCOMES,
+  INITIAL_EXPENSES,
+  INITIAL_MILEAGE,
+  INITIAL_GOALS,
+  INITIAL_VEHICLES,
 } from './utils/dataStorage.js';
-import { updateAuthenticatedUserProfile } from './utils/firebaseAuth.js';
+import { auth } from './utils/firebaseClient.js';
+import {
+  loadAccountForFirebaseUser,
+  isRegistrationInProgress,
+  signOutTraccrUser,
+  explainFirebaseError,
+} from './utils/firebaseAuth.js';
+import { saveCloudAccount } from './utils/cloudSync.js';
 import {
   calculateFinancialSummary,
   calculateCategoryBreakdown,
@@ -26,49 +36,136 @@ import {
 } from './utils/calculate.js';
 import './styles/App.css';
 
+function settingsFromCloud(user, account) {
+  return {
+    ...buildDefaultSettingsForUser(user),
+    ...(account?.settings || {}),
+    uid: user.uid,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    userName: user.userName,
+    email: user.email,
+    phone: user.phone,
+    photoURL: user.photoURL,
+  };
+}
+
 export default function App() {
-  const initialUser = useMemo(() => loadAuthSession(), []);
-  const initialAccount = useMemo(
-    () => loadUserAccountData(initialUser),
-    [initialUser]
-  );
+  const demoSession = useMemo(() => {
+    const s = loadAuthSession();
+    return s && s.isDemo ? s : null;
+  }, []);
 
-  const [authUser, setAuthUser] = useState(initialUser);
-  const [incomes, setIncomes] = useState(initialAccount.incomes);
-  const [expenses, setExpenses] = useState(initialAccount.expenses);
-  const [mileageLogs, setMileageLogs] = useState(initialAccount.mileageLogs);
-  const [goals, setGoals] = useState(initialAccount.goals);
-  const [vehicles, setVehicles] = useState(initialAccount.vehicles);
-  const [settings, setSettings] = useState(initialAccount.settings);
+  const [authUser, setAuthUser] = useState(demoSession);
+  const [booting, setBooting] = useState(!demoSession && Boolean(auth));
+  const [cloudReady, setCloudReady] = useState(false);
+  const [syncState, setSyncState] = useState({ status: 'idle', error: null });
 
-  const currentUid = authUser?.uid;
+  const initial = useMemo(() => loadUserAccountData(demoSession), [demoSession]);
+  const [incomes, setIncomes] = useState(initial.incomes);
+  const [expenses, setExpenses] = useState(initial.expenses);
+  const [mileageLogs, setMileageLogs] = useState(initial.mileageLogs);
+  const [goals, setGoals] = useState(initial.goals);
+  const [vehicles, setVehicles] = useState(initial.vehicles);
+  const [settings, setSettings] = useState(initial.settings);
 
+  const handledUidRef = useRef(null);
+
+  const applyCloudAccount = (user, account) => {
+    handledUidRef.current = user.uid;
+    setAuthUser(user);
+    setIncomes(account.incomes || []);
+    setExpenses(account.expenses || []);
+    setMileageLogs(account.mileageLogs || []);
+    setGoals(account.goals || []);
+    setVehicles(account.vehicles || []);
+    setSettings(settingsFromCloud(user, account));
+    setCloudReady(true);
+  };
+
+  const resetToSignedOut = () => {
+    handledUidRef.current = null;
+    setCloudReady(false);
+    setAuthUser(null);
+    setIncomes([]);
+    setExpenses([]);
+    setMileageLogs([]);
+    setGoals([]);
+    setVehicles([]);
+    setSettings(buildDefaultSettingsForUser(null));
+  };
+
+  // Restore the Firebase session on page load (works on every device)
   useEffect(() => {
-    if (currentUid) saveIncomes(currentUid, incomes);
-  }, [currentUid, incomes]);
-
-  useEffect(() => {
-    if (currentUid) saveExpenses(currentUid, expenses);
-  }, [currentUid, expenses]);
-
-  useEffect(() => {
-    if (currentUid) saveMileageLogs(currentUid, mileageLogs);
-  }, [currentUid, mileageLogs]);
-
-  useEffect(() => {
-    if (currentUid) saveGoals(currentUid, goals);
-  }, [currentUid, goals]);
-
-  useEffect(() => {
-    if (currentUid) saveVehicles(currentUid, vehicles);
-  }, [currentUid, vehicles]);
-
-  useEffect(() => {
-    if (currentUid) {
-      saveSettings(currentUid, settings);
-      syncAccountToFirestore(currentUid);
+    if (!auth || demoSession) {
+      setBooting(false);
+      return undefined;
     }
-  }, [currentUid, incomes, expenses, mileageLogs, goals, vehicles, settings]);
+    const unsub = onAuthStateChanged(auth, async (fbUser) => {
+      if (isRegistrationInProgress()) return;
+      if (!fbUser) {
+        setBooting(false);
+        return;
+      }
+      if (handledUidRef.current === fbUser.uid) {
+        setBooting(false);
+        return;
+      }
+      try {
+        const { user, account } = await loadAccountForFirebaseUser(fbUser);
+        applyCloudAccount(user, account);
+      } catch (err) {
+        setSyncState({ status: 'error', error: explainFirebaseError(err) });
+      } finally {
+        setBooting(false);
+      }
+    });
+    return unsub;
+  }, [demoSession]);
+
+  // Demo account: persist locally only
+  const isDemo = Boolean(authUser?.isDemo);
+  const currentUid = authUser?.uid;
+  useEffect(() => {
+    if (!isDemo || !currentUid) return;
+    saveIncomes(currentUid, incomes);
+    saveExpenses(currentUid, expenses);
+    saveMileageLogs(currentUid, mileageLogs);
+    saveGoals(currentUid, goals);
+    saveVehicles(currentUid, vehicles);
+    saveSettings(currentUid, settings);
+  }, [isDemo, currentUid, incomes, expenses, mileageLogs, goals, vehicles, settings]);
+
+  // Real accounts: debounce-save every change to Firestore
+  useEffect(() => {
+    if (isDemo || !currentUid || !cloudReady) return undefined;
+    setSyncState((s) => ({ ...s, status: 'saving' }));
+    const t = setTimeout(async () => {
+      try {
+        await saveCloudAccount(currentUid, auth?.currentUser?.email || authUser.email, {
+          profile: {
+            firstName: settings.firstName || '',
+            lastName: settings.lastName || '',
+            userName: settings.userName || '',
+            email: settings.email || authUser.email || '',
+            phone: settings.phone || '',
+            photoURL: settings.photoURL || '',
+            userRole: authUser.userRole || 'TRACCR Member • DMG Official',
+          },
+          incomes,
+          expenses,
+          mileageLogs,
+          goals,
+          vehicles,
+          settings,
+        });
+        setSyncState({ status: 'saved', error: null, at: new Date().toISOString() });
+      } catch (err) {
+        setSyncState({ status: 'error', error: explainFirebaseError(err) });
+      }
+    }, 700);
+    return () => clearTimeout(t);
+  }, [isDemo, currentUid, cloudReady, incomes, expenses, mileageLogs, goals, vehicles, settings]);
 
   const selectedMonth = settings.selectedMonth || getCurrentYearMonth();
 
@@ -76,142 +173,95 @@ export default function App() {
     () => calculateFinancialSummary(incomes, expenses, mileageLogs, selectedMonth),
     [incomes, expenses, mileageLogs, selectedMonth]
   );
-
   const monthlySeries = useMemo(
     () => calculateMonthlySeries(incomes, expenses, mileageLogs, 6, selectedMonth),
     [incomes, expenses, mileageLogs, selectedMonth]
   );
-
   const categoryBreakdown = useMemo(() => {
     const filteredExp = filterRecords(expenses, { month: selectedMonth });
     return calculateCategoryBreakdown(filteredExp);
   }, [expenses, selectedMonth]);
-
   const combinedTransactions = useMemo(
     () => getCombinedTransactions(incomes, expenses, { month: selectedMonth }),
     [incomes, expenses, selectedMonth]
   );
 
-  const handleAuthenticated = (user) => {
-    const accountData = loadUserAccountData(user);
-    setAuthUser(user);
-    setIncomes(accountData.incomes);
-    setExpenses(accountData.expenses);
-    setMileageLogs(accountData.mileageLogs);
-    setGoals(accountData.goals);
-    setVehicles(accountData.vehicles);
-    setSettings(accountData.settings);
+  /** Called by AuthScreen after login / sign-up / demo. */
+  const handleAuthenticated = (result) => {
+    if (result && result.account) {
+      applyCloudAccount(result.user, result.account);
+      return;
+    }
+    // Demo user
+    const data = loadUserAccountData(result);
+    handledUidRef.current = result.uid;
+    setAuthUser(result);
+    setIncomes(data.incomes);
+    setExpenses(data.expenses);
+    setMileageLogs(data.mileageLogs);
+    setGoals(data.goals);
+    setVehicles(data.vehicles);
+    setSettings(data.settings);
   };
 
-  const handleLogout = () => {
-    saveAuthUser(null);
-    setAuthUser(null);
+  const handleLogout = async () => {
+    await signOutTraccrUser();
+    resetToSignedOut();
   };
 
   const handleUpdateSettings = (newSettings) => {
     setSettings(newSettings);
     if (authUser) {
-      const updatedUser = {
+      setAuthUser({
         ...authUser,
         firstName: newSettings.firstName,
         lastName: newSettings.lastName,
         userName: newSettings.userName,
-        email: newSettings.email,
         phone: newSettings.phone,
         photoURL: newSettings.photoURL,
-      };
-      setAuthUser(updatedUser);
-      updateAuthenticatedUserProfile(updatedUser);
+      });
     }
   };
 
-  const handleAddIncome = (newInc) => {
-    setIncomes((prev) => [newInc, ...prev]);
-  };
-
-  const handleDeleteIncome = (id) => {
-    setIncomes((prev) => prev.filter((item) => item.id !== id));
-  };
-
-  const handleAddExpense = (newExp) => {
-    setExpenses((prev) => [newExp, ...prev]);
-  };
-
-  const handleDeleteExpense = (id) => {
-    setExpenses((prev) => prev.filter((item) => item.id !== id));
-  };
-
-  const handleAddMileage = (newLog) => {
-    setMileageLogs((prev) => [newLog, ...prev]);
-  };
-
-  const handleDeleteMileage = (id) => {
-    setMileageLogs((prev) => prev.filter((item) => item.id !== id));
-  };
-
-  const handleAddGoal = (newGoal) => {
-    setGoals((prev) => [...prev, newGoal]);
-  };
-
-  const handleUpdateGoal = (id, patch) => {
-    setGoals((prev) =>
-      prev.map((g) => (g.id === id ? { ...g, ...patch } : g))
-    );
-  };
-
-  const handleDeleteGoal = (id) => {
-    setGoals((prev) => prev.filter((g) => g.id !== id));
-  };
-
-  const handleAddVehicle = (newVeh) => {
-    setVehicles((prev) => [...prev, newVeh]);
-  };
-
-  const handleSetPrimaryVehicle = (vehId) => {
-    setVehicles((prev) =>
-      prev.map((v) => ({
-        ...v,
-        isPrimary: v.id === vehId,
-      }))
-    );
-  };
-
-  const handleDeleteVehicle = (vehId) => {
-    setVehicles((prev) => prev.filter((v) => v.id !== vehId));
-  };
+  const handleAddIncome = (n) => setIncomes((p) => [n, ...p]);
+  const handleDeleteIncome = (id) => setIncomes((p) => p.filter((i) => i.id !== id));
+  const handleAddExpense = (n) => setExpenses((p) => [n, ...p]);
+  const handleDeleteExpense = (id) => setExpenses((p) => p.filter((i) => i.id !== id));
+  const handleAddMileage = (n) => setMileageLogs((p) => [n, ...p]);
+  const handleDeleteMileage = (id) => setMileageLogs((p) => p.filter((i) => i.id !== id));
+  const handleAddGoal = (g) => setGoals((p) => [...p, g]);
+  const handleUpdateGoal = (id, patch) =>
+    setGoals((p) => p.map((g) => (g.id === id ? { ...g, ...patch } : g)));
+  const handleDeleteGoal = (id) => setGoals((p) => p.filter((g) => g.id !== id));
+  const handleAddVehicle = (v) => setVehicles((p) => [...p, v]);
+  const handleSetPrimaryVehicle = (vehId) =>
+    setVehicles((p) => p.map((v) => ({ ...v, isPrimary: v.id === vehId })));
+  const handleDeleteVehicle = (vehId) => setVehicles((p) => p.filter((v) => v.id !== vehId));
 
   const handleWipeAllData = () => {
-    if (!authUser) return;
-    const wiped = wipeUserAccountData(authUser);
-    if (wiped) {
-      setIncomes(wiped.incomes);
-      setExpenses(wiped.expenses);
-      setMileageLogs(wiped.mileageLogs);
-      setGoals(wiped.goals);
-      setVehicles(wiped.vehicles);
-    }
+    setIncomes([]);
+    setExpenses([]);
+    setMileageLogs([]);
+    setGoals([]);
+    setVehicles([]);
   };
 
   const handleResetDemoData = () => {
-    if (!authUser) return;
-    const fresh = resetToDemoData(authUser);
-    if (fresh) {
-      setIncomes(fresh.incomes);
-      setExpenses(fresh.expenses);
-      setMileageLogs(fresh.mileageLogs);
-      setGoals(fresh.goals);
-      setVehicles(fresh.vehicles);
-      setSettings((prev) => ({
-        ...fresh.settings,
-        photoURL: prev.photoURL,
-        userName: prev.userName,
-        firstName: prev.firstName,
-        lastName: prev.lastName,
-        email: prev.email,
-        phone: prev.phone,
-      }));
-    }
+    setIncomes(INITIAL_INCOMES);
+    setExpenses(INITIAL_EXPENSES);
+    setMileageLogs(INITIAL_MILEAGE);
+    setGoals(INITIAL_GOALS);
+    setVehicles(INITIAL_VEHICLES);
+    setSettings((prev) => ({ ...prev, selectedMonth: '2026-10' }));
   };
+
+  if (booting) {
+    return (
+      <div className="dmg-auth-page dmg-boot-screen">
+        <div className="dmg-boot-text">Loading your TRACCR account…</div>
+      </div>
+    );
+  }
 
   if (!authUser) {
     return <AuthScreen onAuthenticated={handleAuthenticated} />;
@@ -220,6 +270,7 @@ export default function App() {
   return (
     <Dashboard
       authUser={authUser}
+      syncState={syncState}
       incomes={incomes}
       expenses={expenses}
       mileageLogs={mileageLogs}

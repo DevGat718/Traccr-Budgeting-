@@ -20,7 +20,31 @@ for (const mapFile of ['bundle.js.map', 'bundle.css.map']) {
   }
 }
 
+// Load local-only Firebase config from `.env.local` (gitignored, never committed).
+// In production, GitHub Actions injects these from encrypted repository secrets.
+const ENV_FILE = path.join(__dirname, '.env.local');
+if (fs.existsSync(ENV_FILE)) {
+  for (const line of fs.readFileSync(ENV_FILE, 'utf8').split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+    if (m && !process.env[m[1]]) {
+      process.env[m[1]] = m[2].replace(/^['"]|['"]$/g, '');
+    }
+  }
+}
+
+const FIREBASE_ENV_KEYS = [
+  'TRACCR_FIREBASE_API_KEY',
+  'TRACCR_FIREBASE_AUTH_DOMAIN',
+  'TRACCR_FIREBASE_PROJECT_ID',
+  'TRACCR_FIREBASE_APP_ID',
+];
+
 async function buildBundle() {
+  const define = { 'process.env.NODE_ENV': '"production"' };
+  for (const key of FIREBASE_ENV_KEYS) {
+    define[`process.env.${key}`] = JSON.stringify((process.env[key] || '').trim());
+  }
+
   await esbuild.build({
     entryPoints: [path.join(__dirname, 'src/index.js')],
     bundle: true,
@@ -32,42 +56,18 @@ async function buildBundle() {
       '.jpg': 'dataurl',
       '.svg': 'dataurl',
     },
-    define: {
-      'process.env.NODE_ENV': '"production"',
-      'process.env.TRACCR_FIREBASE_API_KEY': JSON.stringify(
-        process.env.TRACCR_FIREBASE_API_KEY || ''
-      ),
-      'process.env.TRACCR_FIREBASE_AUTH_DOMAIN': JSON.stringify(
-        process.env.TRACCR_FIREBASE_AUTH_DOMAIN || ''
-      ),
-      'process.env.TRACCR_FIREBASE_PROJECT_ID': JSON.stringify(
-        process.env.TRACCR_FIREBASE_PROJECT_ID || ''
-      ),
-      'process.env.TRACCR_FIREBASE_FALLBACK_PROJECT_ID': JSON.stringify(
-        process.env.TRACCR_FIREBASE_FALLBACK_PROJECT_ID || ''
-      ),
-    },
+    define,
     minify: true,
     sourcemap: false,
     logLevel: 'info',
   });
 
-  // Sync index.html, bundle.js, bundle.css, favicon.ico, and .nojekyll to root (/) and docs/
-  // so GitHub Pages (whether configured for `/`, `/docs`, or `gh-pages`) always serves the live app
-  const docsDir = path.join(__dirname, 'docs');
-  if (!fs.existsSync(docsDir)) {
-    fs.mkdirSync(docsDir, { recursive: true });
-  }
-  for (const targetDir of [__dirname, docsDir]) {
-    for (const asset of ['index.html', 'bundle.js', 'bundle.css', 'favicon.ico']) {
-      const src = path.join(PUBLIC_DIR, asset);
-      const dest = path.join(targetDir, asset);
-      if (fs.existsSync(src)) {
-        fs.copyFileSync(src, dest);
-      }
-    }
-    fs.writeFileSync(path.join(targetDir, '.nojekyll'), '');
-  }
+  const missing = FIREBASE_ENV_KEYS.slice(0, 3).filter((k) => !process.env[k]);
+  console.log(
+    missing.length
+      ? `WARNING: Firebase cloud is DISABLED in this build. Missing: ${missing.join(', ')}`
+      : `Firebase cloud ENABLED for project "${process.env.TRACCR_FIREBASE_PROJECT_ID}".`
+  );
 }
 
 await buildBundle();

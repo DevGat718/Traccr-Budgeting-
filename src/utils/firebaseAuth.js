@@ -1,133 +1,37 @@
 /**
- * TRACCR by DMG Official
- * Hardened Authentication Service (Web Crypto Salted SHA-256 + Firebase REST API)
- * Never stores plaintext passwords in browser storage.
+ * TRACCR by DMG Official — Authentication (official Firebase Auth SDK).
+ *
+ * - Every real account lives in Firebase Auth + Firestore (`users/{uid}`), so it works
+ *   on every device. There is NO local/offline account fallback anymore (that fallback
+ *   is what caused "account exists on my phone but not my computer").
+ * - Firebase enforces one account per email address (no duplicates).
+ * - Passwords are handled entirely by Firebase; nothing password-related is stored locally.
+ * - The demo account stays local-only and never touches the cloud.
  */
 
 import {
-  getRegisteredUsers,
-  saveRegisteredUsers,
-  saveAuthUser,
-  getFirebaseConfig,
-  DEFAULT_USER_PROFILE,
-  wipeUserAccountData,
-  syncAccountToFirestore,
-  hydrateAccountFromFirestore,
-  saveFirebaseSessionTokens,
-  getValidFirebaseIdToken,
-  getCandidateProjectIds,
-} from './dataStorage.js';
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  sendEmailVerification,
+  sendPasswordResetEmail,
+  updateProfile,
+  signOut,
+} from 'firebase/auth';
+import { auth, isCloudConfigured, getConfigSummary } from './firebaseClient.js';
+import {
+  buildEmptyAccount,
+  createCloudAccount,
+  loadCloudAccount,
+  saveCloudAccount,
+} from './cloudSync.js';
+import { DEFAULT_USER_PROFILE, saveAuthUser } from './dataStorage.js';
 
 export const WELCOME_VERIFICATION_MESSAGE =
   'Congratulations. Thank you for signing up with TRACCR! You are one step closer to reaching your financial goals and building future wealth.';
 
-/**
- * Dispatches the TRACCR verification & welcome email to a newly registered user
- * via Firebase Auth (`accounts:sendOobCode` VERIFY_EMAIL) + Cloud Firestore `traccr_mail` queue.
- */
-export async function sendTraccrVerificationEmail({
-  email,
-  userName = 'TRACCR Member',
-  idToken = '',
-  uid = '',
-}) {
-  const cleanEmail = String(email || '').trim().toLowerCase();
-  const fbConfig = getFirebaseConfig();
-  const activeToken = idToken || (await getValidFirebaseIdToken());
-
-  if (!fbConfig || !fbConfig.apiKey) {
-    return {
-      sent: false,
-      email: cleanEmail,
-      reason:
-        'Firebase Cloud API key is not active on this build yet (check GitHub Settings → Pages → Source is set to "GitHub Actions").',
-    };
-  }
-
-  if (!activeToken) {
-    return {
-      sent: false,
-      email: cleanEmail,
-      reason:
-        'This account was created before Firebase Cloud was connected. Please Log Out and Log Back In (or Sign Up a new account) to trigger the verification email.',
-    };
-  }
-
-  let firebaseDispatched = false;
-  let firebaseError = '';
-
-  // 1. Trigger Firebase Authentication Verification Email (sendOobCode)
-  try {
-    const res = await fetch(
-      `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${encodeURIComponent(
-        fbConfig.apiKey
-      )}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          requestType: 'VERIFY_EMAIL',
-          idToken: activeToken,
-        }),
-      }
-    );
-    const data = await res.json();
-    if (res.ok) {
-      firebaseDispatched = true;
-    } else {
-      firebaseError = data?.error?.message || 'Firebase rejected sendOobCode request.';
-    }
-  } catch (err) {
-    firebaseError = err.message || 'Network error contacting Firebase Auth.';
-  }
-
-  // 2. Queue custom welcome message in Cloud Firestore `traccr_mail` collection
-  if (fbConfig && fbConfig.projectId && cleanEmail) {
-    try {
-      const headers = { 'Content-Type': 'application/json' };
-      if (activeToken) {
-        headers.Authorization = `Bearer ${activeToken}`;
-      }
-      const mailBody = JSON.stringify({
-        fields: {
-          to: { stringValue: cleanEmail },
-          uid: { stringValue: String(uid || '') },
-          userName: { stringValue: String(userName || '') },
-          subject: {
-            stringValue: 'Congratulations! Welcome to TRACCR by DMG Official',
-          },
-          text: { stringValue: WELCOME_VERIFICATION_MESSAGE },
-          html: {
-            stringValue: `<div style="font-family:Inter,Arial,sans-serif;background:#0c0e12;color:#ffffff;padding:28px;border-radius:16px;border:1px solid #22c55e;"><h2 style="color:#22c55e;margin-top:0;">TRACCR by DMG Official</h2><p style="font-size:16px;line-height:1.6;color:#f8fafc;">${WELCOME_VERIFICATION_MESSAGE}</p><p style="font-size:12px;color:#94a3b8;margin-top:20px;">TRACK TODAY. BUILD TOMORROW.</p></div>`,
-          },
-          createdAt: { stringValue: new Date().toISOString() },
-        },
-      });
-      for (const pid of getCandidateProjectIds(fbConfig)) {
-        const res = await fetch(
-          `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
-            pid
-          )}/databases/(default)/documents/traccr_mail`,
-          {
-            method: 'POST',
-            headers,
-            body: mailBody,
-          }
-        );
-        if (res.ok) break;
-      }
-    } catch (err) {
-      console.warn('Firestore traccr_mail welcome record skipped:', err);
-    }
-  }
-
-  return {
-    sent: firebaseDispatched,
-    email: cleanEmail,
-    reason: firebaseError,
-    message: WELCOME_VERIFICATION_MESSAGE,
-    sentAt: new Date().toISOString(),
-  };
+let registrationInProgress = false;
+export function isRegistrationInProgress() {
+  return registrationInProgress;
 }
 
 function sanitizeText(str, maxLen = 120) {
@@ -137,374 +41,288 @@ function sanitizeText(str, maxLen = 120) {
     .slice(0, maxLen);
 }
 
-function generateSalt() {
-  const bytes = new Uint8Array(16);
-  if (window.crypto && window.crypto.getRandomValues) {
-    window.crypto.getRandomValues(bytes);
-  } else {
-    for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
-  }
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+/**
+ * Maps Firebase error codes to a plain-English message + the exact fix.
+ */
+export function explainFirebaseError(err) {
+  const code = String(err?.code || err?.message || 'unknown');
+  const table = [
+    ['auth/email-already-in-use', 'An account with this email already exists.', 'Switch to "Log In", or use "Forgot password?".'],
+    ['auth/invalid-credential', 'Email or password is incorrect.', 'Double-check both, or use "Forgot password?".'],
+    ['auth/wrong-password', 'Email or password is incorrect.', 'Double-check both, or use "Forgot password?".'],
+    ['auth/user-not-found', 'Email or password is incorrect.', 'If you never signed up with this email, create an account.'],
+    ['auth/invalid-email', 'That email address is not valid.', 'Check the spelling of the email.'],
+    ['auth/weak-password', 'Password is too weak.', 'Use at least 6 characters.'],
+    ['auth/missing-password', 'Please enter a password.', ''],
+    ['auth/too-many-requests', 'Too many attempts. Firebase temporarily blocked this device.', 'Wait 5–15 minutes, then try again.'],
+    ['auth/network-request-failed', 'Could not reach Firebase.', 'Check your internet connection or disable ad/tracker blockers for this site.'],
+    ['auth/operation-not-allowed', 'Email/Password sign-in is turned OFF in Firebase.', 'Firebase Console → Authentication → Sign-in method → Email/Password → Enable → Save.'],
+    ['auth/configuration-not-found', 'Firebase Authentication is not set up for this project.', 'Firebase Console → Authentication → click "Get started", then enable Email/Password.'],
+    ['auth/api-key-not-valid', 'The Firebase API key in GitHub Secrets is wrong.', 'Re-copy apiKey from Firebase Console → Project settings → General → Your apps, into the TRACCR_FIREBASE_API_KEY secret.'],
+    ['auth/invalid-api-key', 'The Firebase API key in GitHub Secrets is wrong.', 'Re-copy apiKey from Firebase Console → Project settings → General → Your apps, into the TRACCR_FIREBASE_API_KEY secret.'],
+    ['auth/requests-from-referer', 'Your Google Cloud API key restriction is blocking this website.', 'Google Cloud Console → APIs & Services → Credentials → your Browser key → Website restrictions → add https://devgat718.github.io/* (and http://localhost:3000/*).'],
+    ['auth/unauthorized-domain', 'This website is not in Firebase Authorized domains.', 'Firebase Console → Authentication → Settings → Authorized domains → add devgat718.github.io'],
+    ['auth/unauthorized-continue-uri', 'This website is not in Firebase Authorized domains.', 'Firebase Console → Authentication → Settings → Authorized domains → add devgat718.github.io'],
+    ['auth/quota-exceeded', 'Firebase daily email quota reached.', 'Wait until tomorrow (free plan limit) or upgrade the Firebase plan.'],
+    ['auth/user-token-expired', 'Your login session expired.', 'Log out and log back in.'],
+    ['auth/requires-recent-login', 'Your login session is too old for this action.', 'Log out and log back in.'],
+    ['permission-denied', 'Firestore Security Rules blocked the request.', 'Firebase Console → Firestore Database → Rules → paste the rules from firestore.rules → Publish.'],
+    ['not-found', 'The Firestore database does not exist yet.', 'Firebase Console → Firestore Database → Create database.'],
+    ['failed-precondition', 'The Firestore database is not ready.', 'Firebase Console → Firestore Database → Create database (Native mode).'],
+    ['unavailable', 'Firestore is unreachable right now.', 'Check your internet connection and try again.'],
+  ];
+  const hit = table.find(([key]) => code.includes(key));
+  if (hit) return { code, message: hit[1], fix: hit[2] };
+  return { code, message: err?.message || 'Something went wrong.', fix: '' };
 }
 
-async function hashPasswordWithSalt(password, salt) {
-  const payload = `${salt}:${password}`;
-  if (window.crypto && window.crypto.subtle) {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(payload);
-    const hashBuffer = await window.crypto.subtle.digest('SHA-256', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+function requireCloud() {
+  if (!isCloudConfigured || !auth) {
+    throw new Error(
+      'TRACCR Cloud is not connected on this build, so accounts cannot be created or logged into yet. (Missing Firebase GitHub Secrets.)'
+    );
   }
-  // Fallback deterministic hash if subtle crypto unavailable
-  let h = 2166136261;
-  for (let i = 0; i < payload.length; i++) {
-    h ^= payload.charCodeAt(i);
-    h = Math.imul(h, 16777619);
+}
+
+function friendlyError(err) {
+  const info = explainFirebaseError(err);
+  const e = new Error(info.fix ? `${info.message} ${info.fix}` : info.message);
+  e.code = info.code;
+  return e;
+}
+
+function sessionFromAccount(firebaseUser, account) {
+  const p = account?.profile || {};
+  return {
+    uid: firebaseUser.uid,
+    email: firebaseUser.email,
+    emailVerified: Boolean(firebaseUser.emailVerified),
+    firstName: p.firstName || '',
+    lastName: p.lastName || '',
+    userName: p.userName || firebaseUser.displayName || firebaseUser.email.split('@')[0],
+    phone: p.phone || '',
+    photoURL: p.photoURL || '',
+    userRole: p.userRole || 'TRACCR Member • DMG Official',
+    isDemo: false,
+    provider: 'firebase',
+  };
+}
+
+/** Sends the Firebase verification email and reports exactly what happened. */
+export async function sendTraccrVerificationEmail() {
+  if (!isCloudConfigured || !auth) {
+    return { sent: false, ...explainFirebaseError({ code: 'not-configured', message: 'TRACCR Cloud is not connected on this build.' }), fix: 'Add the Firebase GitHub Secrets and redeploy.' };
   }
-  return (h >>> 0).toString(16);
+  const user = auth.currentUser;
+  if (!user) {
+    return { sent: false, code: 'no-user', message: 'You are not logged into a cloud account.', fix: 'Log out and log back in with your email + password.' };
+  }
+  try {
+    await user.reload();
+    if (user.emailVerified) {
+      return { sent: false, code: 'already-verified', message: 'This email is already verified. ✅', fix: '' };
+    }
+    await sendEmailVerification(user);
+    return {
+      sent: true,
+      code: 'ok',
+      message: `Firebase accepted the request and sent the verification email to ${user.email}.`,
+      fix: 'If it is not in your Inbox within 2 minutes, check Spam/Junk/Promotions for "noreply@" + your Firebase project.',
+    };
+  } catch (err) {
+    return { sent: false, ...explainFirebaseError(err) };
+  }
+}
+
+export async function sendTraccrPasswordReset(email) {
+  requireCloud();
+  const cleanEmail = sanitizeText(email, 160).toLowerCase();
+  if (!cleanEmail) throw new Error('Enter your email address first, then tap "Forgot password?".');
+  try {
+    await sendPasswordResetEmail(auth, cleanEmail);
+  } catch (err) {
+    // Don't reveal whether the email exists; only surface configuration problems.
+    const info = explainFirebaseError(err);
+    if (!info.code.includes('user-not-found') && !info.code.includes('invalid-credential')) {
+      throw friendlyError(err);
+    }
+  }
 }
 
 /**
- * Registers a new TRACCR user account (First Name, Last Name, Email, Phone, Password, Photo).
- * Every newly created account is initialized completely empty (zero income, zero expenses, zero mileage, zero goals).
+ * Creates a Firebase account + an empty cloud profile, then sends the verification email.
+ * Returns { user, account, emailResult }.
  */
-export async function registerTraccrUser({
-  firstName,
-  lastName,
-  email,
-  phone,
-  password,
-  photoURL = '',
-}) {
+export async function registerTraccrUser({ firstName, lastName, email, phone, password, photoURL = '' }) {
+  requireCloud();
   const cleanEmail = sanitizeText(email, 160).toLowerCase();
   const cleanFirst = sanitizeText(firstName, 60);
   const cleanLast = sanitizeText(lastName, 60);
   const cleanPhone = sanitizeText(phone, 30);
 
-  if (!cleanLast) {
-    throw new Error('Please enter your Last Name.');
-  }
-  if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
-    throw new Error('Please enter a valid Email Address.');
-  }
-  if (!cleanPhone) {
-    throw new Error('Please enter your Phone Number.');
-  }
-  if (!password || password.length < 6) {
-    throw new Error('Please enter a password (at least 6 characters).');
-  }
+  if (!cleanLast) throw new Error('Please enter your Last Name.');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) throw new Error('Please enter a valid Email Address.');
+  if (!cleanPhone) throw new Error('Please enter your Phone Number.');
+  if (!password || password.length < 6) throw new Error('Please enter a password (at least 6 characters).');
 
-  const fbConfig = getFirebaseConfig();
   const fullName = cleanFirst ? `${cleanFirst} ${cleanLast}` : cleanLast;
-  let firebaseUid = null;
-  let firebaseIdToken = '';
-
-  if (fbConfig && fbConfig.apiKey) {
+  registrationInProgress = true;
+  try {
+    let cred;
     try {
-      const res = await fetch(
-        `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${encodeURIComponent(
-          fbConfig.apiKey
-        )}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: cleanEmail,
-            password,
-            displayName: fullName,
-            returnSecureToken: true,
-          }),
-        }
-      );
-      const data = await res.json();
-      if (!res.ok && data?.error?.message) {
-        if (data.error.message.includes('EMAIL_EXISTS')) {
-          throw new Error(
-            'An account with this email address already exists in TRACCR Cloud. Please switch to "Log In".'
-          );
-        }
-        throw new Error(`Firebase Auth: ${data.error.message}`);
-      }
-      firebaseUid = data.localId;
-      firebaseIdToken = data.idToken || '';
-      saveFirebaseSessionTokens({
-        idToken: firebaseIdToken,
-        refreshToken: data.refreshToken || '',
-      });
-
-      // Update Firebase Auth profile with displayName
-      if (firebaseIdToken) {
-        await fetch(
-          `https://identitytoolkit.googleapis.com/v1/accounts:update?key=${encodeURIComponent(
-            fbConfig.apiKey
-          )}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              idToken: firebaseIdToken,
-              displayName: fullName,
-              returnSecureToken: false,
-            }),
-          }
-        ).catch(() => {});
-      }
+      cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
     } catch (err) {
-      if (err.message.startsWith('Firebase Auth:')) throw err;
-      console.warn('Firebase cloud signup fallback to local store');
+      throw friendlyError(err);
     }
+    const fbUser = cred.user;
+    await updateProfile(fbUser, { displayName: fullName }).catch(() => {});
+
+    const account = buildEmptyAccount({
+      uid: fbUser.uid,
+      email: fbUser.email,
+      firstName: cleanFirst,
+      lastName: cleanLast,
+      userName: fullName,
+      phone: cleanPhone,
+      photoURL,
+    });
+    let cloudError = null;
+    try {
+      await createCloudAccount(account);
+    } catch (err) {
+      cloudError = explainFirebaseError(err);
+    }
+
+    const emailResult = await sendTraccrVerificationEmail();
+    const user = { ...sessionFromAccount(fbUser, account), justSignedUp: true };
+    return { user, account, emailResult, cloudError };
+  } finally {
+    registrationInProgress = false;
   }
-
-  const users = getRegisteredUsers();
-  const existing = users.find((u) => u.email.toLowerCase() === cleanEmail);
-  if (existing && !firebaseUid) {
-    throw new Error('An account with this email address already exists. Please log in.');
-  }
-
-  const salt = generateSalt();
-  const passwordHash = await hashPasswordWithSalt(password, salt);
-
-  const newUser = {
-    uid: firebaseUid || `usr-${Date.now()}`,
-    firstName: cleanFirst,
-    lastName: cleanLast,
-    userName: fullName,
-    email: cleanEmail,
-    phone: cleanPhone,
-    userRole: 'TRACCR Member • DMG Official',
-    photoURL: photoURL || '',
-    salt,
-    passwordHash,
-    isDemo: false,
-    provider: firebaseUid ? 'firebase' : 'firebase-local',
-    verificationEmailSent: true,
-    verificationMessage: WELCOME_VERIFICATION_MESSAGE,
-    createdAt: new Date().toISOString(),
-  };
-
-  // Ensure new user starts with 100% blank / zero data
-  wipeUserAccountData(newUser);
-
-  const filteredUsers = users.filter((u) => u.email.toLowerCase() !== cleanEmail);
-  const updatedUsers = [newUser, ...filteredUsers];
-  saveRegisteredUsers(updatedUsers);
-
-  // Dispatch Verification & Welcome Email + Sync new blank account to Cloud Firestore
-  await sendTraccrVerificationEmail({
-    email: cleanEmail,
-    userName: fullName,
-    idToken: firebaseIdToken,
-    uid: newUser.uid,
-  });
-  await syncAccountToFirestore(newUser.uid, firebaseIdToken);
-
-  const sessionUser = {
-    ...newUser,
-    justSignedUp: true,
-  };
-  delete sessionUser.passwordHash;
-  delete sessionUser.salt;
-  saveAuthUser(sessionUser);
-  return sessionUser;
 }
 
 /**
- * Signs in an existing user with Email & Password across any device.
+ * Loads (or repairs) the cloud account for a signed-in Firebase user.
  */
+export async function loadAccountForFirebaseUser(fbUser) {
+  let account = await loadCloudAccount(fbUser.uid);
+  if (!account) {
+    account = buildEmptyAccount({
+      uid: fbUser.uid,
+      email: fbUser.email,
+      userName: fbUser.displayName || fbUser.email.split('@')[0],
+    });
+    await createCloudAccount(account);
+  }
+  return { user: sessionFromAccount(fbUser, account), account };
+}
+
 export async function signInTraccrUser({ email, password }) {
+  requireCloud();
   const cleanEmail = sanitizeText(email, 160).toLowerCase();
-  if (!cleanEmail || !password) {
-    throw new Error('Please enter both your email address and password.');
+  if (!cleanEmail || !password) throw new Error('Please enter both your email address and password.');
+  let cred;
+  try {
+    cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
+  } catch (err) {
+    throw friendlyError(err);
   }
-
-  const fbConfig = getFirebaseConfig();
-  if (fbConfig && fbConfig.apiKey) {
-    try {
-      const res = await fetch(
-        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(
-          fbConfig.apiKey
-        )}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: cleanEmail,
-            password,
-            returnSecureToken: true,
-          }),
-        }
-      );
-      const data = await res.json();
-      if (res.ok && data.localId) {
-        saveFirebaseSessionTokens({
-          idToken: data.idToken || '',
-          refreshToken: data.refreshToken || '',
-        });
-        // Hydrate cross-device profile & data from Cloud Firestore
-        const cloudAccount = await hydrateAccountFromFirestore(data.localId, data.idToken);
-        const users = getRegisteredUsers();
-        const localMatch = users.find(
-          (u) => u.uid === data.localId || u.email.toLowerCase() === cleanEmail
-        );
-        const cloudProfile = cloudAccount?.profile || {};
-        const displayParts = String(data.displayName || '').trim().split(' ');
-
-        const sessionUser = {
-          uid: data.localId,
-          firstName:
-            cloudProfile.firstName ||
-            localMatch?.firstName ||
-            displayParts[0] ||
-            cleanEmail.split('@')[0],
-          lastName:
-            cloudProfile.lastName ||
-            localMatch?.lastName ||
-            displayParts.slice(1).join(' ') ||
-            '',
-          userName:
-            cloudProfile.userName ||
-            localMatch?.userName ||
-            data.displayName ||
-            cleanEmail.split('@')[0],
-          email: cleanEmail,
-          phone: cloudProfile.phone || localMatch?.phone || '',
-          userRole:
-            cloudProfile.userRole || localMatch?.userRole || 'TRACCR Member • DMG Official',
-          photoURL: cloudProfile.photoURL || localMatch?.photoURL || '',
-          isDemo: false,
-          provider: 'firebase',
-        };
-
-        // Ensure the user is cached in this device's local users list too
-        const otherUsers = users.filter(
-          (u) => u.uid !== data.localId && u.email.toLowerCase() !== cleanEmail
-        );
-        saveRegisteredUsers([{ ...localMatch, ...sessionUser }, ...otherUsers]);
-
-        delete sessionUser.password;
-        delete sessionUser.passwordHash;
-        delete sessionUser.salt;
-        saveAuthUser(sessionUser);
-        return sessionUser;
-      } else if (data?.error?.message) {
-        // Check if this account was created locally on this device before Firebase Cloud was connected.
-        // If the local password hash matches, auto-migrate it to Firebase Cloud so it works on all devices!
-        const localUsers = getRegisteredUsers();
-        const localExisting = localUsers.find((u) => u.email.toLowerCase() === cleanEmail);
-        if (localExisting && localExisting.passwordHash && localExisting.salt) {
-          const candidateHash = await hashPasswordWithSalt(password, localExisting.salt);
-          if (candidateHash === localExisting.passwordHash) {
-            const migRes = await fetch(
-              `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${encodeURIComponent(
-                fbConfig.apiKey
-              )}`,
-              {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  email: cleanEmail,
-                  password,
-                  displayName: localExisting.userName || cleanEmail.split('@')[0],
-                  returnSecureToken: true,
-                }),
-              }
-            );
-            const migData = await migRes.json();
-            if (migRes.ok && migData.localId) {
-              saveFirebaseSessionTokens({
-                idToken: migData.idToken || '',
-                refreshToken: migData.refreshToken || '',
-              });
-              await sendTraccrVerificationEmail({
-                email: cleanEmail,
-                userName: localExisting.userName || cleanEmail.split('@')[0],
-                idToken: migData.idToken,
-                uid: migData.localId,
-              });
-              await syncAccountToFirestore(localExisting.uid, migData.idToken);
-              await syncAccountToFirestore(migData.localId, migData.idToken);
-            }
-            const migratedSession = {
-              ...localExisting,
-              provider: 'firebase',
-              justSignedUp: true,
-            };
-            delete migratedSession.password;
-            delete migratedSession.passwordHash;
-            delete migratedSession.salt;
-            saveAuthUser(migratedSession);
-            return migratedSession;
-          }
-        }
-
-        if (cleanEmail !== DEFAULT_USER_PROFILE.email.toLowerCase()) {
-          throw new Error('Invalid email or password.');
-        }
-      }
-    } catch (err) {
-      if (err.message === 'Invalid email or password.') throw err;
-      console.warn('Firebase cloud sign-in fallback to local store');
-    }
+  try {
+    return await loadAccountForFirebaseUser(cred.user);
+  } catch (err) {
+    await signOut(auth).catch(() => {});
+    throw friendlyError(err);
   }
-
-  const users = getRegisteredUsers();
-  const match = users.find((u) => u.email.toLowerCase() === cleanEmail);
-  if (!match) {
-    throw new Error('Invalid email or password.');
-  }
-
-  if (match.passwordHash && match.salt) {
-    const candidateHash = await hashPasswordWithSalt(password, match.salt);
-    if (candidateHash !== match.passwordHash) {
-      throw new Error('Invalid email or password.');
-    }
-  } else if (match.password && match.password !== password) {
-    throw new Error('Invalid email or password.');
-  }
-
-  const sessionUser = { ...match };
-  delete sessionUser.password;
-  delete sessionUser.passwordHash;
-  delete sessionUser.salt;
-  saveAuthUser(sessionUser);
-  return sessionUser;
 }
 
-/**
- * Instant Demo Login as Devin Gatling (DMG Official).
- */
 export function signInDemoUser() {
-  const users = getRegisteredUsers();
-  const demo =
-    users.find((u) => u.email.toLowerCase() === DEFAULT_USER_PROFILE.email.toLowerCase()) ||
-    DEFAULT_USER_PROFILE;
-  const sessionUser = { ...demo, isDemo: true };
-  delete sessionUser.password;
-  delete sessionUser.passwordHash;
-  delete sessionUser.salt;
+  const sessionUser = { ...DEFAULT_USER_PROFILE, isDemo: true };
   saveAuthUser(sessionUser);
   return sessionUser;
 }
 
+export async function signOutTraccrUser() {
+  saveAuthUser(null);
+  if (auth) await signOut(auth).catch(() => {});
+}
+
 /**
- * Updates the currently signed-in user's profile in both session and users DB.
+ * Runs every check between "Sign Up" and "email in inbox / data in cloud".
+ * Each step: { label, status: 'pass' | 'fail' | 'warn', detail, fix }
  */
-export function updateAuthenticatedUserProfile(patch) {
-  const users = getRegisteredUsers();
-  const updatedUsers = users.map((u) => {
-    if (
-      (patch.uid && u.uid === patch.uid) ||
-      (patch.email && u.email.toLowerCase() === patch.email.toLowerCase())
-    ) {
-      return { ...u, ...patch };
-    }
-    return u;
+export async function runCloudDiagnostics({ sendEmail = false } = {}) {
+  const steps = [];
+  const cfg = getConfigSummary();
+
+  steps.push(
+    cfg.apiKeyLoaded && cfg.projectId !== '(missing)' && cfg.authDomain !== '(missing)'
+      ? { label: 'Firebase config in this build', status: 'pass', detail: `Project: ${cfg.projectId} • Auth domain: ${cfg.authDomain}` }
+      : {
+          label: 'Firebase config in this build',
+          status: 'fail',
+          detail: `API key loaded: ${cfg.apiKeyLoaded ? 'yes' : 'NO'} • Project: ${cfg.projectId} • Auth domain: ${cfg.authDomain}`,
+          fix: 'GitHub repo → Settings → Secrets and variables → Actions → "Repository secrets" must contain TRACCR_FIREBASE_API_KEY, TRACCR_FIREBASE_AUTH_DOMAIN, TRACCR_FIREBASE_PROJECT_ID. Then re-run the Deploy workflow.',
+        }
+  );
+  if (!isCloudConfigured || !auth) return steps;
+
+  steps.push({
+    label: 'Website domain',
+    status: 'warn',
+    detail: `This page is running on "${window.location.hostname}".`,
+    fix: `Make sure "${window.location.hostname}" is listed in Firebase Console → Authentication → Settings → Authorized domains.`,
   });
-  saveRegisteredUsers(updatedUsers);
-  const safePatch = { ...patch };
-  delete safePatch.password;
-  delete safePatch.passwordHash;
-  delete safePatch.salt;
-  saveAuthUser(safePatch);
+
+  const user = auth.currentUser;
+  if (!user) {
+    steps.push({ label: 'Signed in to Firebase', status: 'fail', detail: 'No cloud user is signed in (demo accounts are local-only).', fix: 'Log out and log in with a real email + password account.' });
+    return steps;
+  }
+  steps.push({ label: 'Signed in to Firebase', status: 'pass', detail: `${user.email} (uid ${user.uid.slice(0, 6)}…)` });
+
+  try {
+    await user.getIdToken(true);
+    steps.push({ label: 'API key + token refresh', status: 'pass', detail: 'Firebase accepted this site and refreshed the login token.' });
+  } catch (err) {
+    const info = explainFirebaseError(err);
+    steps.push({ label: 'API key + token refresh', status: 'fail', detail: `${info.message} (${info.code})`, fix: info.fix });
+    return steps;
+  }
+
+  try {
+    const acct = await loadCloudAccount(user.uid);
+    steps.push(
+      acct
+        ? { label: 'Cloud database read', status: 'pass', detail: `Found your account document (last saved ${acct.updatedAt || 'n/a'}).` }
+        : { label: 'Cloud database read', status: 'warn', detail: 'Read worked, but no account document exists yet.', fix: 'Log out and back in to recreate it.' }
+    );
+    if (acct) {
+      await saveCloudAccount(user.uid, user.email, acct);
+      steps.push({ label: 'Cloud database write', status: 'pass', detail: 'Saved successfully — your data syncs across devices.' });
+    }
+  } catch (err) {
+    const info = explainFirebaseError(err);
+    steps.push({ label: 'Cloud database read/write', status: 'fail', detail: `${info.message} (${info.code})`, fix: info.fix });
+  }
+
+  try {
+    await user.reload();
+  } catch (_) {}
+  steps.push(
+    user.emailVerified
+      ? { label: 'Email verified', status: 'pass', detail: `${user.email} is verified.` }
+      : { label: 'Email verified', status: 'warn', detail: `${user.email} has not clicked the verification link yet.` }
+  );
+
+  if (sendEmail && !user.emailVerified) {
+    const r = await sendTraccrVerificationEmail();
+    steps.push({
+      label: 'Send verification email',
+      status: r.sent ? 'pass' : 'fail',
+      detail: `${r.message}${r.code && !r.sent ? ` (${r.code})` : ''}`,
+      fix: r.fix,
+    });
+  }
+
+  return steps;
 }
